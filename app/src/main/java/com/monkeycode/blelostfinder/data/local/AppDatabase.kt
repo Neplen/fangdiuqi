@@ -7,8 +7,11 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import com.monkeycode.blelostfinder.data.model.BleDevice
 import com.monkeycode.blelostfinder.data.model.LocationRecord
+import dagger.Module
+import dagger.Provides
+import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
-import javax.inject.Inject
+import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
 
 @Database(
@@ -17,9 +20,7 @@ import javax.inject.Singleton
     exportSchema = false
 )
 @TypeConverters(Converters::class)
-abstract class AppDatabase @Inject constructor(
-    @ApplicationContext context: Context
-) : RoomDatabase() {
+abstract class AppDatabase : RoomDatabase() {
     abstract fun bleDeviceDao(): BleDeviceDao
     abstract fun locationRecordDao(): LocationRecordDao
 
@@ -38,5 +39,29 @@ abstract class AppDatabase @Inject constructor(
                 instance
             }
         }
+    }
+}
+
+@Module
+@InstallIn(SingletonComponent::class)
+object DatabaseModule {
+    @Provides
+    @Singleton
+    fun provideDatabase(
+        @ApplicationContext context: Context
+    ): AppDatabase {
+        return AppDatabase.getDatabase(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideBleDeviceDao(database: AppDatabase): BleDeviceDao {
+        return database.bleDeviceDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideLocationRecordDao(database: AppDatabase): LocationRecordDao {
+        return database.locationRecordDao()
     }
 }

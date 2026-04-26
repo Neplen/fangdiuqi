@@ -1,0 +1,136 @@
+package com.monkeycode.blelostfinder.data.local
+
+import android.content.Context
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import com.monkeycode.blelostfinder.data.model.BleDevice
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
+import javax.inject.Inject
+import javax.inject.Singleton
+
+val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
+
+@Singleton
+class SettingsManager @Inject constructor(
+    @ApplicationContext private val context: Context
+) {
+    companion object {
+        val DEVICE_NAME = stringPreferencesKey("device_name")
+        val DEVICE_MAC = stringPreferencesKey("device_mac")
+        val RSSI_THRESHOLD = intPreferencesKey("rssi_threshold")
+        val ALARM_DELAY = intPreferencesKey("alarm_delay")
+        val WIFI_DND_ENABLED = booleanPreferencesKey("wifi_dnd_enabled")
+        val SCHEDULE_DND_ENABLED = booleanPreferencesKey("schedule_dnd_enabled")
+        val DND_START_TIME = stringPreferencesKey("dnd_start_time")
+        val DND_END_TIME = stringPreferencesKey("dnd_end_time")
+        val ALARM_RINGTONE_PATH = stringPreferencesKey("alarm_ringtone_path")
+        val AUTO_START_ENABLED = booleanPreferencesKey("auto_start_enabled")
+        val MONITORING_ENABLED = booleanPreferencesKey("monitoring_enabled")
+    }
+
+    val deviceName: Flow<String> = context.dataStore.data.map { preferences ->
+        preferences[DEVICE_NAME] ?: "iTAG"
+    }
+
+    val deviceMac: Flow<String> = context.dataStore.data.map { preferences ->
+        preferences[DEVICE_MAC] ?: "FF:FF:11:8C:4E:3B"
+    }
+
+    val rssiThreshold: Flow<Int> = context.dataStore.data.map { preferences ->
+        preferences[RSSI_THRESHOLD] ?: -90
+    }
+
+    val alarmDelay: Flow<Int> = context.dataStore.data.map { preferences ->
+        preferences[ALARM_DELAY] ?: 60
+    }
+
+    val isWifiDndEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[WIFI_DND_ENABLED] ?: true
+    }
+
+    val isScheduleDndEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[SCHEDULE_DND_ENABLED] ?: true
+    }
+
+    val dndStartTime: Flow<String> = context.dataStore.data.map { preferences ->
+        preferences[DND_START_TIME] ?: "21:00"
+    }
+
+    val dndEndTime: Flow<String> = context.dataStore.data.map { preferences ->
+        preferences[DND_END_TIME] ?: "08:00"
+    }
+
+    val alarmRingtonePath: Flow<String?> = context.dataStore.data.map { preferences ->
+        preferences[ALARM_RINGTONE_PATH]
+    }
+
+    val isMonitoringEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[MONITORING_ENABLED] ?: false
+    }
+
+    suspend fun updateDeviceName(name: String) {
+        context.dataStore.edit { preferences ->
+            preferences[DEVICE_NAME] = name
+        }
+    }
+
+    suspend fun updateDeviceMac(mac: String) {
+        context.dataStore.edit { preferences ->
+            preferences[DEVICE_MAC] = mac
+        }
+    }
+
+    suspend fun updateRssiThreshold(threshold: Int) {
+        context.dataStore.edit { preferences ->
+            preferences[RSSI_THRESHOLD] = threshold
+        }
+    }
+
+    suspend fun updateAlarmDelay(seconds: Int) {
+        context.dataStore.edit { preferences ->
+            preferences[ALARM_DELAY] = seconds
+        }
+    }
+
+    suspend fun updateWifiDndEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[WIFI_DND_ENABLED] = enabled
+        }
+    }
+
+    suspend fun updateScheduleDndEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[SCHEDULE_DND_ENABLED] = enabled
+        }
+    }
+
+    suspend fun updateDndTime(startTime: String, endTime: String) {
+        context.dataStore.edit { preferences ->
+            preferences[DND_START_TIME] = startTime
+            preferences[DND_END_TIME] = endTime
+        }
+    }
+
+    suspend fun updateAlarmRingtonePath(path: String?) {
+        context.dataStore.edit { preferences ->
+            if (path != null) {
+                preferences[ALARM_RINGTONE_PATH] = path
+            } else {
+                preferences.remove(ALARM_RINGTONE_PATH)
+            }
+        }
+    }
+
+    suspend fun updateMonitoringEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[MONITORING_ENABLED] = enabled
+        }
+    }
+}

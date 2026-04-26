@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.monkeycode.blelostfinder.ble.BleConnectionState
 import com.monkeycode.blelostfinder.ble.BleManager
+import com.monkeycode.blelostfinder.data.local.SettingsManager
 import com.monkeycode.blelostfinder.data.model.BleDevice
 import com.monkeycode.blelostfinder.data.repository.DeviceRepository
 import com.monkeycode.blelostfinder.service.BleMonitorService
@@ -30,8 +31,8 @@ class HomeViewModel @Inject constructor(
     private val _device = MutableStateFlow<BleDevice?>(null)
     val device: StateFlow<BleDevice?> = _device.asStateFlow()
     
-    val rssi = bleManager.rssi
-    val batteryLevel = bleManager.batteryLevel
+    val rssi: StateFlow<Int> = bleManager.rssi
+    val batteryLevel: StateFlow<Int> = bleManager.batteryLevel
     
     init {
         loadDevice()
@@ -40,7 +41,7 @@ class HomeViewModel @Inject constructor(
     
     private fun loadDevice() {
         viewModelScope.launch {
-            deviceRepository.getDeviceByMac(BleManager.I_DEVICE_MAC).collect { device: BleDevice? ->
+            deviceRepository.getDeviceByMacFlow(BleManager.I_DEVICE_MAC).collect { device: BleDevice? ->
                 _device.value = device
             }
         }

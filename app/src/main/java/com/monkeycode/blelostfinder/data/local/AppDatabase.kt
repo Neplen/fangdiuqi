@@ -7,6 +7,7 @@ import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import com.monkeycode.blelostfinder.data.model.BleDevice
 import com.monkeycode.blelostfinder.data.model.LocationRecord
+import com.monkeycode.blelostfinder.data.repository.DeviceRepository
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -63,5 +64,14 @@ object DatabaseModule {
     @Singleton
     fun provideLocationRecordDao(database: AppDatabase): LocationRecordDao {
         return database.locationRecordDao()
+    }
+    
+    @Provides
+    @Singleton
+    fun provideDeviceRepository(
+        bleDeviceDao: BleDeviceDao,
+        locationRecordDao: LocationRecordDao
+    ): DeviceRepository {
+        return DeviceRepository(bleDeviceDao, locationRecordDao)
     }
 }

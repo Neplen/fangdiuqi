@@ -1,7 +1,6 @@
 package com.monkeycode.blelostfinder.util
 
 import android.Manifest
-import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -11,6 +10,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
 import com.permissionx.guolindev.PermissionX
 
 object PermissionHelper {
@@ -38,7 +38,7 @@ object PermissionHelper {
         }
     }
     
-    fun requestPermissions(activity: Activity, callback: (Boolean) -> Unit) {
+    fun requestPermissions(activity: FragmentActivity, callback: (Boolean) -> Unit) {
         PermissionX.init(activity)
             .permissions(getRequiredPermissions())
             .request { allGranted: Boolean, grantedList: List<String>, deniedList: List<String> ->
@@ -51,7 +51,7 @@ object PermissionHelper {
         return powerManager.isIgnoringBatteryOptimizations(context.packageName)
     }
     
-    fun requestIgnoreBatteryOptimizations(activity: Activity) {
+    fun requestIgnoreBatteryOptimizations(activity: FragmentActivity) {
         val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
             data = Uri.parse("package:${activity.packageName}")
         }
@@ -89,7 +89,7 @@ object PermissionHelper {
         return Settings.canDrawOverlays(context)
     }
     
-    fun requestDrawOverlays(activity: Activity) {
+    fun requestDrawOverlays(activity: FragmentActivity) {
         val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
             data = Uri.parse("package:${activity.packageName}")
         }

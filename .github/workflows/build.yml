@@ -1,90 +1,41 @@
-name: Android CI - Build APK
+name: Build APK
 
 on:
   push:
-    branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
-  workflow_dispatch:  # 允许手动触发
+    branches: [ main ]
 
 jobs:
-  build-debug:
-    name: Build Debug APK
+  build:
     runs-on: ubuntu-latest
-
     steps:
-    - name: 检出代码
-      uses: actions/checkout@v4
+      - name: 检出代码
+        uses: actions/checkout@v4
 
-    - name: 验证项目结构
-      run: |
-        echo "=== 验证 Android 项目结构 ==="
-        echo "检查 gradle wrapper..."
-        ls -la gradlew gradlew.bat gradle/wrapper/
-        
-        echo "检查 build.gradle.kts..."
-        ls -la build.gradle.kts settings.gradle.kts
-        
-        echo "检查 app 模块..."
-        ls -la app/build.gradle.kts app/src/
-        
-        echo "验证 Gradle Wrapper..."
-        chmod +x gradlew
-        ./gradlew --version
+      - name: 配置 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
 
-    - name: 设置 JDK 17
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
-        cache: 'gradle'
+      # 关键：安装 Android SDK（必须步骤）
+      - name: 配置 Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 33 # 可以根据你的项目修改，比如 34
+          build-tools: 33.0.2
 
-    - name: 授予执行权限
-      run: chmod +x gradlew
+      # 手动安装 Gradle 8.5（绕开 setup-gradle 的 wrapper 逻辑）
+      - name: 安装 Gradle 8.5
+        run: |
+          wget https://services.gradle.org/distributions/gradle-8.5-bin.zip -P /tmp
+          unzip -d /opt/gradle /tmp/gradle-8.5-bin.zip
+          echo "/opt/gradle/gradle-8.5/bin" >> $GITHUB_PATH
 
-    - name: 编译 Debug APK
-      run: ./gradlew assembleDebug --stacktrace --info
-      env:
-        TERM: dummy
+      - name: 构建 Debug APK
+        run: gradle assembleDebug
 
-    - name: 验证 APK 生成
-      run: |
-        echo "检查生成的 APK..."
-        ls -lh app/build/outputs/apk/debug/
-        echo "APK 大小："
-        du -h app/build/outputs/apk/debug/app-debug.apk
-
-    - name: 上传 Debug APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: BleLostFinder-Debug
-        path: app/build/outputs/apk/debug/app-debug.apk
-        retention-days: 30
-
-  build-release:
-    name: Build Release APK
-    runs-on: ubuntu-latest
-    needs: build-debug
-    
-    steps:
-    - name: 检出代码
-      uses: actions/checkout@v4
-
-    - name: 设置 JDK 17
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
-        cache: 'gradle'
-
-    - name: 编译 Release APK
-      run: ./gradlew assembleRelease --stacktrace
-      continue-on-error: true
-
-    - name: 上传 Release APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: BleLostFinder-Release-Unsigned
-        path: app/build/outputs/apk/release/app-release-unsigned.apk
-        retention-days: 30
-        if-no-files-found: ignore
+      - name: 上传 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/*.apk

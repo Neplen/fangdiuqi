@@ -11,6 +11,7 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
+import androidx.annotation.OptIn
 import com.monkeycode.blelostfinder.R
 import com.monkeycode.blelostfinder.ble.BleConnectionState
 import com.monkeycode.blelostfinder.ble.BleEvent
@@ -194,7 +195,7 @@ class BleMonitorService : Service() {
         wifiLock = null
     }
 
-    @androidx.annotation.OptIn(androidx.annotation.ExperimentalStdlibApi::class)
+    @OptIn(androidx.annotation.ExperimentalStdlibApi::class)
     private fun startMonitoring() {
         if (isMonitoring) {
             Log.d(TAG, "Already monitoring")
@@ -254,7 +255,7 @@ class BleMonitorService : Service() {
         updateNotificationText("监控已停止")
     }
 
-    @androidx.annotation.OptIn(androidx.annotation.ExperimentalStdlibApi::class)
+    @OptIn(androidx.annotation.ExperimentalStdlibApi::class)
     private fun handleConnectionState(state: BleConnectionState, device: BleDevice) {
         serviceScope.launch {
             when (state) {
@@ -347,7 +348,7 @@ class BleMonitorService : Service() {
         alarmSoundManager.stopPlaying()
     }
 
-    @androidx.annotation.OptIn(androidx.annotation.ExperimentalStdlibApi::class)
+    @OptIn(androidx.annotation.ExperimentalStdlibApi::class)
     private fun isInDndMode(): Boolean {
         // Check WiFi DND
         if (isWifiDndActive) {

@@ -96,7 +96,7 @@ class BleManager @Inject constructor(
                 // Subscribe to custom characteristic for button press
                 customCharacteristic?.let {
                     gatt.setCharacteristicNotification(it, true)
-                    it.descriptor?.let { descriptor ->
+                    it.descriptors.firstOrNull()?.let { descriptor ->
                         gatt.writeDescriptor(descriptor)
                     }
                 }

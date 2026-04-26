@@ -7,6 +7,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.monkeycode.blelostfinder.data.local.SettingsManager
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import java.io.File
@@ -19,7 +20,7 @@ class SettingsViewModel @Inject constructor(
 ) : AndroidViewModel(application) {
     
     val deviceName: StateFlow<String> = settingsManager.deviceName
-    val rssiThreshold: StateFlow<Int> = settingsManager.rssiThreshold
+    val rssiThreshold: Flow<Int> = settingsManager.rssiThreshold
     val alarmDelay: StateFlow<Int> = settingsManager.alarmDelay
     val isWifiDndEnabled: StateFlow<Boolean> = settingsManager.isWifiDndEnabled
     val isScheduleDndEnabled: StateFlow<Boolean> = settingsManager.isScheduleDndEnabled

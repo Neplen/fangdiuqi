@@ -1,18 +1,17 @@
 package com.monkeycode.blelostfinder.service
 
-import android.Manifest
-import android.app.*
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
-import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
-import androidx.annotation.OptIn
-import com.monkeycode.blelostfinder.R
 import com.monkeycode.blelostfinder.ble.BleConnectionState
 import com.monkeycode.blelostfinder.ble.BleEvent
 import com.monkeycode.blelostfinder.ble.BleManager
@@ -20,14 +19,18 @@ import com.monkeycode.blelostfinder.data.local.SettingsManager
 import com.monkeycode.blelostfinder.data.model.BleDevice
 import com.monkeycode.blelostfinder.data.model.LocationRecord
 import com.monkeycode.blelostfinder.data.repository.DeviceRepository
+import com.monkeycode.blelostfinder.ui.settings.AlarmSoundManager
 import dagger.hilt.android.AndroidEntryPoint
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.*
-import java.text.SimpleDateFormat
-import java.util.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.launch
+import java.util.Calendar
 import javax.inject.Inject
-import kotlin.math.abs
-import kotlin.math.pow
 
 @AndroidEntryPoint
 class BleMonitorService : Service() {
@@ -38,8 +41,7 @@ class BleMonitorService : Service() {
         private const val ACTION_STOP_MONITORING = "com.monkeycode.blelostfinder.STOP_MONITORING"
         
         private const val DEFAULT_RSSI_THRESHOLD = -90
-        private const val DEFAULT_ALARM_DELAY = 60 // seconds
-        private const val LOCATION_FILTER_TIME = 30000L // 30 seconds
+        private const val DEFAULT_ALARM_DELAY = 60
     }
 
     @Inject
@@ -50,6 +52,9 @@ class BleMonitorService : Service() {
 
     @Inject
     lateinit var deviceRepository: DeviceRepository
+    
+    @Inject
+    lateinit var alarmSoundManager: AlarmSoundManager
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
@@ -61,16 +66,11 @@ class BleMonitorService : Service() {
     private var currentDevice: BleDevice? = null
     private var deviceMac: String = BleManager.I_DEVICE_MAC
     
-    // RSSI monitoring
-    private var lastValidRssi = -100
-    private var lastRecordedRssi = -100
     private var alarmTriggerTime: Long? = null
     private var isAlarmPlaying = false
     private var isWifiDndActive = false
     
     private var wifiLock: WifiManager.WifiLock? = null
-
-    private val monitorJob = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     override fun onCreate() {
         super.onCreate()
@@ -109,14 +109,12 @@ class BleMonitorService : Service() {
         stopMonitoring()
         releaseWakeLock()
         serviceScope.cancel()
-        monitorJob.cancel()
         super.onDestroy()
     }
 
     private fun initialize() {
         if (!bleManager.initialize()) {
             Log.e(TAG, "Failed to initialize BLE")
-            return
         }
     }
 
@@ -154,23 +152,12 @@ class BleMonitorService : Service() {
             .build()
     }
 
-    private fun updateNotificationText(text: String) {
-        val notification = NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
-            .setContentTitle("BLE 防丢器")
-            .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setOngoing(true)
-            .build()
-        notificationManager.notify(NOTIFICATION_ID, notification)
-    }
-
     private fun acquireWakeLock() {
         val powerManager = getSystemService(POWER_SERVICE) as PowerManager
         wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "BleLostFinder::MonitorWakeLock").apply {
-            acquire(10 * 60 * 1000L) // 10 minutes max
+            acquire(10 * 60 * 1000L)
         }
         
-        // Acquire WiFi lock to keep network active
         wifiLock = wifiManager?.createWifiLock(
             WifiManager.WIFI_MODE_FULL,
             "BleLostFinder::WifiLock"
@@ -195,7 +182,6 @@ class BleMonitorService : Service() {
         wifiLock = null
     }
 
-    @OptIn(androidx.annotation.ExperimentalStdlibApi::class)
     private fun startMonitoring() {
         if (isMonitoring) {
             Log.d(TAG, "Already monitoring")
@@ -204,15 +190,10 @@ class BleMonitorService : Service() {
 
         isMonitoring = true
         
-        // Get device settings
         serviceScope.launch {
             deviceRepository.getDeviceByMac(deviceMac)?.let { device ->
                 currentDevice = device
-                bleManager.connect(device.macAddress).collect { state ->
-                    handleConnectionState(state, device)
-                }
             } ?: run {
-                // No device in DB, create default
                 val defaultDevice = BleDevice(
                     macAddress = deviceMac,
                     name = "iTAG",
@@ -221,14 +202,13 @@ class BleMonitorService : Service() {
                 )
                 deviceRepository.insertDevice(defaultDevice)
                 currentDevice = defaultDevice
-
-                bleManager.connect(deviceMac).collect { state ->
-                    handleConnectionState(state, defaultDevice)
-                }
             }
+
+            bleManager.connect(deviceMac).onEach { state ->
+                handleConnectionState(state)
+            }.launchIn(this)
         }
         
-        // Monitor WiFi DND state
         serviceScope.launch {
             settingsManager.isWifiDndEnabled.collect { enabled ->
                 isWifiDndActive = enabled && isWifiConnected()
@@ -236,7 +216,6 @@ class BleMonitorService : Service() {
             }
         }
         
-        // Listen for BLE events
         serviceScope.launch {
             bleManager.bleEvents.collect { event ->
                 handleBleEvent(event)
@@ -244,7 +223,6 @@ class BleMonitorService : Service() {
         }
         
         Log.d(TAG, "Monitoring started")
-        updateNotificationText("监控中...")
     }
 
     private fun stopMonitoring() {
@@ -252,51 +230,43 @@ class BleMonitorService : Service() {
         bleManager.disconnect()
         stopAlarmIfPlaying()
         Log.d(TAG, "Monitoring stopped")
-        updateNotificationText("监控已停止")
     }
 
-    @OptIn(androidx.annotation.ExperimentalStdlibApi::class)
-    private fun handleConnectionState(state: BleConnectionState, device: BleDevice) {
+    private fun handleConnectionState(state: BleConnectionState) {
         serviceScope.launch {
             when (state) {
                 is BleConnectionState.Connected -> {
                     Log.d(TAG, "Connected to device")
                     alarmTriggerTime = null
-                    updateNotificationText("已连接 - ${device.name}")
                     
-                    // Update last connected time
-                    deviceRepository.updateDevice(device.copy(
-                        lastConnectedTime = System.currentTimeMillis(),
-                        updatedAt = System.currentTimeMillis()
-                    ))
+                    currentDevice?.let { device ->
+                        deviceRepository.updateDevice(device.copy(
+                            lastConnectedTime = System.currentTimeMillis(),
+                            updatedAt = System.currentTimeMillis()
+                        ))
+                    }
                 }
                 is BleConnectionState.Disconnected -> {
                     Log.d(TAG, "Disconnected from device")
-                    updateNotificationText("已断开 - ${device.name}")
                     
-                    // Record disconnection location
-                    recordDisconnectionLocation(device.macAddress)
+                    recordDisconnectionLocation(deviceMac)
                     
-                    // Update last disconnected time
-                    deviceRepository.updateDevice(device.copy(
-                        lastDisconnectedTime = System.currentTimeMillis(),
-                        updatedAt = System.currentTimeMillis()
-                    ))
+                    currentDevice?.let { device ->
+                        deviceRepository.updateDevice(device.copy(
+                            lastDisconnectedTime = System.currentTimeMillis(),
+                            updatedAt = System.currentTimeMillis()
+                        ))
+                    }
                     
-                    // Try to reconnect after delay
-                    withContext(Dispatchers.IO) {
-                        delay(5000)
-                        if (isMonitoring) {
-                            bleManager.connect(device.macAddress)
-                        }
+                    kotlinx.coroutines.delay(5000)
+                    if (isMonitoring) {
+                        bleManager.connect(deviceMac)
                     }
                 }
                 is BleConnectionState.Connecting -> {
-                    updateNotificationText("连接中...")
                 }
                 is BleConnectionState.Error -> {
                     Log.e(TAG, "BLE Error: ${state.message}")
-                    updateNotificationText("错误：${state.message}")
                 }
                 else -> {}
             }
@@ -310,27 +280,18 @@ class BleMonitorService : Service() {
                     Log.d(TAG, "Device button pressed - trigger phone alarm")
                     triggerPhoneAlarm("防丢器按键触发")
                 }
-                is BleEvent.AlarmTriggered -> {
-                    Log.d(TAG, "Alarm triggered: ${event.reason}")
-                }
-                is BleEvent.LocationRecorded -> {
-                    Log.d(TAG, "Location recorded")
-                }
                 else -> {}
             }
         }
     }
 
     private fun recordDisconnectionLocation(deviceMac: String) {
-        // Location recording is disabled until map feature is configured
-        // This can be implemented later when needed
         Log.d(TAG, "Device disconnected: $deviceMac (location recording disabled)")
     }
 
     private fun triggerPhoneAlarm(reason: String) {
         if (isAlarmPlaying) return
         
-        // Check if in DND mode
         if (isInDndMode()) {
             Log.d(TAG, "In DND mode, not triggering alarm: $reason")
             return
@@ -339,7 +300,14 @@ class BleMonitorService : Service() {
         isAlarmPlaying = true
         Log.d(TAG, "Triggering phone alarm: $reason")
         
-        // TODO: Implement alarm playing with MediaPlayer
+        serviceScope.launch {
+            try {
+                val ringtonePath = settingsManager.alarmRingtonePath.firstOrNull()
+                alarmSoundManager.playAlarm(ringtonePath)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error playing alarm", e)
+            }
+        }
     }
 
     private fun stopAlarmIfPlaying() {
@@ -348,15 +316,16 @@ class BleMonitorService : Service() {
         alarmSoundManager.stopPlaying()
     }
 
-    @OptIn(androidx.annotation.ExperimentalStdlibApi::class)
     private fun isInDndMode(): Boolean {
-        // Check WiFi DND
         if (isWifiDndActive) {
             Log.d(TAG, "WiFi DND is active")
             return true
         }
         
-        // Check schedule DND
+        if (!isScheduleDndEnabled()) {
+            return false
+        }
+        
         val calendar = Calendar.getInstance()
         val currentTime = calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE)
         
@@ -369,20 +338,18 @@ class BleMonitorService : Service() {
         val endTime = endHour * 60 + endMinute
         
         return if (startTime <= endTime) {
-            // Normal range (e.g., 21:00 - 08:00 next day)
             currentTime in startTime..endTime
         } else {
-            // Overnight range (e.g., 21:00 - 08:00)
             currentTime >= startTime || currentTime <= endTime
         }
+    }
+    
+    private suspend fun isScheduleDndEnabled(): Boolean {
+        return settingsManager.isScheduleDndEnabled.firstOrNull() ?: true
     }
 
     private fun isWifiConnected(): Boolean {
         val networkInfo = wifiManager?.connectionInfo
         return networkInfo?.ssid != null && networkInfo.ssid != "<unknown ssid>"
-    }
-
-    private suspend fun updateDevice(device: BleDevice) {
-        deviceRepository.updateDevice(device)
     }
 }

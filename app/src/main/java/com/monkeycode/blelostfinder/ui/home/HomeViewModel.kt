@@ -5,7 +5,6 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.monkeycode.blelostfinder.ble.BleConnectionState
 import com.monkeycode.blelostfinder.ble.BleManager
-import com.monkeycode.blelostfinder.data.local.SettingsManager
 import com.monkeycode.blelostfinder.data.model.BleDevice
 import com.monkeycode.blelostfinder.data.repository.DeviceRepository
 import com.monkeycode.blelostfinder.service.BleMonitorService
@@ -41,7 +40,7 @@ class HomeViewModel @Inject constructor(
     
     private fun loadDevice() {
         viewModelScope.launch {
-            deviceRepository.getDeviceByMac(BleManager.I_DEVICE_MAC).collect { device ->
+            deviceRepository.getDeviceByMac(BleManager.I_DEVICE_MAC).collect { device: BleDevice? ->
                 _device.value = device
             }
         }
@@ -49,7 +48,7 @@ class HomeViewModel @Inject constructor(
     
     private fun observeBleState() {
         viewModelScope.launch {
-            bleManager.connectionState.collect { state ->
+            bleManager.connectionState.collect { state: BleConnectionState ->
                 _connectionState.value = state
             }
         }
@@ -60,7 +59,6 @@ class HomeViewModel @Inject constructor(
     }
     
     fun findPhone() {
-        // Phone alarm will be triggered by BleMonitorService when button is pressed
     }
     
     fun startMonitoring() {

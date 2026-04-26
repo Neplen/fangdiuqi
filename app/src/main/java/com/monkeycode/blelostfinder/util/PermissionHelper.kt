@@ -16,7 +16,7 @@ import com.permissionx.guolindev.PermissionX
 object PermissionHelper {
     
     fun getRequiredPermissions(): List<String> {
-        val permissions = mutableListOf(
+        val permissions = listOf(
             Manifest.permission.BLUETOOTH,
             Manifest.permission.BLUETOOTH_ADMIN,
             Manifest.permission.BLUETOOTH_CONNECT,
@@ -33,15 +33,15 @@ object PermissionHelper {
     }
     
     fun checkAllPermissions(context: Context): Boolean {
-        return getRequiredPermissions().all { permission ->
+        return getRequiredPermissions().all { permission: String ->
             ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
         }
     }
     
-    fun requestPermissions(activity: Activity, callback: (allGranted: Boolean) -> Unit) {
+    fun requestPermissions(activity: Activity, callback: (Boolean) -> Unit) {
         PermissionX.init(activity)
             .permissions(getRequiredPermissions())
-            .request { allGranted, _, _ ->
+            .request { allGranted: Boolean, _, _ ->
                 callback(allGranted)
             }
     }

@@ -41,7 +41,7 @@ object PermissionHelper {
     fun requestPermissions(activity: Activity, callback: (Boolean) -> Unit) {
         PermissionX.init(activity)
             .permissions(getRequiredPermissions())
-            .request { allGranted: Boolean, _, _ ->
+            .request { allGranted: Boolean, grantedList: List<String>, deniedList: List<String> ->
                 callback(allGranted)
             }
     }

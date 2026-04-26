@@ -322,10 +322,6 @@ class BleMonitorService : Service() {
             return true
         }
         
-        if (!isScheduleDndEnabled()) {
-            return false
-        }
-        
         val calendar = Calendar.getInstance()
         val currentTime = calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE)
         
@@ -342,10 +338,6 @@ class BleMonitorService : Service() {
         } else {
             currentTime >= startTime || currentTime <= endTime
         }
-    }
-    
-    private suspend fun isScheduleDndEnabled(): Boolean {
-        return settingsManager.isScheduleDndEnabled.firstOrNull() ?: true
     }
 
     private fun isWifiConnected(): Boolean {

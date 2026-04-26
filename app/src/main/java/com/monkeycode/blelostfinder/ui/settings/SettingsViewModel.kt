@@ -77,7 +77,8 @@ class SettingsViewModel @Inject constructor(
     }
     
     private fun getCustomRecordingPath(): String? {
-        val audioDir = File(getApplication<Context>().getExternalFilesDir(null), "alarms")
+        val context = getApplication<Application>().applicationContext
+        val audioDir = File(context.getExternalFilesDir(null), "alarms")
         val file = File(audioDir, "alarm_sound.m4a")
         return if (file.exists()) file.absolutePath else null
     }

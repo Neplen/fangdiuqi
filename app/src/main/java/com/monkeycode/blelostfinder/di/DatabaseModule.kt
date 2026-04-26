@@ -4,7 +4,7 @@ import android.content.Context
 import com.monkeycode.blelostfinder.data.local.AppDatabase
 import com.monkeycode.blelostfinder.data.local.BleDeviceDao
 import com.monkeycode.blelostfinder.data.local.LocationRecordDao
-import com.monkeycode.blelostfinder.data.local.SettingsManager
+import com.monkeycode.blelostfinder.data.repository.DeviceRepository
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -23,13 +23,13 @@ object DatabaseModule {
     ): AppDatabase {
         return AppDatabase.getDatabase(context)
     }
-    
+
     @Provides
     @Singleton
     fun provideBleDeviceDao(database: AppDatabase): BleDeviceDao {
         return database.bleDeviceDao()
     }
-    
+
     @Provides
     @Singleton
     fun provideLocationRecordDao(database: AppDatabase): LocationRecordDao {
@@ -38,9 +38,10 @@ object DatabaseModule {
     
     @Provides
     @Singleton
-    fun provideSettingsManager(
-        @ApplicationContext context: Context
-    ): SettingsManager {
-        return SettingsManager(context)
+    fun provideDeviceRepository(
+        bleDeviceDao: BleDeviceDao,
+        locationRecordDao: LocationRecordDao
+    ): DeviceRepository {
+        return DeviceRepository(bleDeviceDao, locationRecordDao)
     }
 }

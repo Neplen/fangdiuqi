@@ -5,7 +5,8 @@ import android.bluetooth.BluetoothAdapter
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
+import android.view.Menu
+import android.view.MenuItem
 import android.view.View
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
@@ -18,7 +19,6 @@ import com.google.android.material.snackbar.Snackbar
 import com.monkeycode.blelostfinder.R
 import com.monkeycode.blelostfinder.databinding.ActivityMainBinding
 import com.monkeycode.blelostfinder.service.BleMonitorService
-import com.monkeycode.blelostfinder.util.PermissionHelper
 import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
@@ -56,18 +56,51 @@ class MainActivity : AppCompatActivity() {
         checkPermissions()
     }
     
+    // 添加菜单支持
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.main_menu, menu)
+        return true
+    }
+    
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        return when (item.itemId) {
+            R.id.action_add_device -> {
+                // 打开设备扫描页面
+                val navController = findNavController(R.id.nav_host_fragment)
+                navController.navigate(R.id.action_scan)
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
+        }
+    }
+    
     private fun setupNavigation() {
         val navController = findNavController(R.id.nav_host_fragment)
         binding.bottomNavigation.setupWithNavController(navController)
     }
     
     private fun checkPermissions() {
-        if (!PermissionHelper.checkAllPermissions(this)) {
-            PermissionHelper.requestPermissions(this) { allGranted ->
-                if (!allGranted) {
-                    showSnackbar("部分权限未授予，某些功能可能无法使用")
-                }
-            }
+        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            arrayOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            )
+        } else {
+            arrayOf(
+                Manifest.permission.BLUETOOTH,
+                Manifest.permission.BLUETOOTH_ADMIN,
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            )
+        }
+        
+        val needRequest = permissions.any {
+            ContextCompat.checkSelfPermission(this, it) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        
+        if (needRequest) {
+            permissionLauncher.launch(permissions)
         } else {
             checkBluetoothAndStart()
         }

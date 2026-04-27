@@ -239,8 +239,11 @@ class SettingsFragment : Fragment() {
         val minute = calendar.get(Calendar.MINUTE)
         
         // 使用 MaterialTimePicker
+        val is24Hour = DateFormat.is24HourFormat(requireContext())
+        val timeFormat = if (is24Hour) TimeFormat.CLOCK_24H else TimeFormat.CLOCK_12H
+        
         val timePicker = MaterialTimePicker.Builder()
-            .setTimeFormat(if (DateFormat.is24HourFormat(requireContext())) TimeFormat.TIME_FORMAT_24 else TimeFormat.TIME_FORMAT_12)
+            .setTimeFormat(timeFormat)
             .setHour(hour)
             .setMinute(minute)
             .setTitleText("选择时间")

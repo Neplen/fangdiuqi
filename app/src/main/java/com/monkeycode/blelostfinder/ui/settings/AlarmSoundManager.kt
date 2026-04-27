@@ -137,24 +137,26 @@ class AlarmSoundManager @Inject constructor(
     fun previewRingtone(uri: android.net.Uri?) {
         stopPlaying()
         
+        if (uri == null) {
+            playDefaultAlarm()
+            return
+        }
+        
         try {
-            mediaPlayer = if (uri != null) {
-                MediaPlayer().apply {
-                    setDataSource(contextApp, uri)
-                    setAudioStreamType(AudioManager.STREAM_RING)
-                    setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_ALARM)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                            .build()
-                    )
-                    prepare()
-                    isLooping = false  // 预览只播放一次
-                    start()
-                }
-            } else {
-                playDefaultAlarm()
+            mediaPlayer = MediaPlayer().apply {
+                setDataSource(contextApp, uri)
+                setAudioStreamType(AudioManager.STREAM_RING)
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ALARM)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+                prepare()
+                isLooping = false  // 预览只播放一次
+                start()
             }
+            Log.d(TAG, "Previewing ringtone")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to preview ringtone", e)
         }

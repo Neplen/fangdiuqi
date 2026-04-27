@@ -10,11 +10,6 @@
         android:label="Home" />
 
     <fragment
-        android:id="@+id/navigation_map"
-        android:name="com.monkeycode.blelostfinder.ui.map.MapFragment"
-        android:label="Map" />
-
-    <fragment
         android:id="@+id/navigation_settings"
         android:name="com.monkeycode.blelostfinder.ui.settings.SettingsFragment"
         android:label="Settings" />

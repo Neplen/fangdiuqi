@@ -1,6 +1,8 @@
 package com.monkeycode.blelostfinder.ui.home
 
 import android.app.Application
+import android.content.Intent
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.monkeycode.blelostfinder.ble.BleConnectionState
@@ -63,14 +65,23 @@ class HomeViewModel @Inject constructor(
     }
     
     fun startMonitoring() {
-        val context = getApplication<Application>().applicationContext
-        val serviceIntent = android.content.Intent(context, BleMonitorService::class.java)
-        context.startForegroundService(serviceIntent)
+        try {
+            val context = getApplication<Application>().applicationContext
+            val serviceIntent = Intent(context, BleMonitorService::class.java)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                context.startForegroundService(serviceIntent)
+            } else {
+                context.startService(serviceIntent)
+            }
+            Log.d("HomeViewModel", "前台服务已启动")
+        } catch (e: Exception) {
+            Log.e("HomeViewModel", "启动服务失败：${e.message}", e)
+        }
     }
     
     fun stopMonitoring() {
         val context = getApplication<Application>().applicationContext
-        val serviceIntent = android.content.Intent(context, BleMonitorService::class.java)
+        val serviceIntent = Intent(context, BleMonitorService::class.java)
         context.stopService(serviceIntent)
     }
 }

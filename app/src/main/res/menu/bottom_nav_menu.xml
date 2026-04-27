@@ -5,10 +5,6 @@
         android:icon="@android:drawable/ic_dialog_info"
         android:title="@string/home" />
     <item
-        android:id="@+id/navigation_map"
-        android:icon="@android:drawable/ic_menu_mylocation"
-        android:title="@string/map" />
-    <item
         android:id="@+id/navigation_settings"
         android:icon="@android:drawable/ic_menu_preferences"
         android:title="@string/settings" />

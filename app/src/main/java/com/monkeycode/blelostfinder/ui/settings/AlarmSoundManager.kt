@@ -114,6 +114,8 @@ class AlarmSoundManager @Inject constructor(
         try {
             mediaPlayer = MediaPlayer().apply {
                 setDataSource(audioPath)
+                // 使用响铃音量流，而不是媒体音量
+                setAudioStreamType(AudioManager.STREAM_RING)
                 setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_ALARM)
@@ -135,7 +137,9 @@ class AlarmSoundManager @Inject constructor(
         try {
             mediaPlayer = MediaPlayer.create(
                 contextApp,
-                android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
+                android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM),
+                null,
+                AudioManager.STREAM_RING  // 使用响铃音量
             )?.apply {
                 isLooping = true
                 start()

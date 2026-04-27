@@ -2,8 +2,11 @@ package com.monkeycode.blelostfinder.ui.settings
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.os.Bundle
+import android.os.Handler
+import android.text.format.DateFormat
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -16,6 +19,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.timepicker.MaterialTimePicker
+import com.google.android.material.timepicker.TimeFormat
 import com.monkeycode.blelostfinder.R
 import com.monkeycode.blelostfinder.databinding.FragmentSettingsBinding
 import com.monkeycode.blelostfinder.util.PermissionHelper
@@ -233,17 +238,19 @@ class SettingsFragment : Fragment() {
         val hour = calendar.get(Calendar.HOUR_OF_DAY)
         val minute = calendar.get(Calendar.MINUTE)
         
-        MaterialAlertDialogBuilder(requireContext())
-            .setTitle("选择时间")
-            .setView(R.layout.dialog_time_picker)
-            .setPositiveButton("确定") { _, _ ->
-                callback(hour, minute)
-            }
-            .setNegativeButton("取消", null)
-            .show()
+        // 使用 MaterialTimePicker
+        val timePicker = MaterialTimePicker.Builder()
+            .setTimeFormat(if (DateFormat.is24HourFormat(requireContext())) TimeFormat.TIME_FORMAT_24 else TimeFormat.TIME_FORMAT_12)
+            .setHour(hour)
+            .setMinute(minute)
+            .setTitleText("选择时间")
+            .build()
         
-        // Note: For simplicity, using current time
-        // A full implementation would use TimePicker
+        timePicker.addOnPositiveButtonClickListener {
+            callback(timePicker.hour, timePicker.minute)
+        }
+        
+        timePicker.show(requireActivity().supportFragmentManager, "time_picker")
     }
     
     private fun showRingtonePicker() {
@@ -254,15 +261,57 @@ class SettingsFragment : Fragment() {
             "自定义录音"
         )
         
+        var currentMediaPlayer: MediaPlayer? = null
+        
         MaterialAlertDialogBuilder(requireContext())
-            .setTitle("选择报警铃声")
-            .setItems(ringtones.toTypedArray()) { _, which ->
+            .setTitle("选择报警铃声（点击可预览）")
+            .setItems(ringtones.toTypedArray()) { dialog, which ->
+                // 停止之前的预览
+                currentMediaPlayer?.apply {
+                    if (isPlaying) stop()
+                    release()
+                }
+                
+                // 选择并预览铃声
+                val uri = when (which) {
+                    0 -> android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_RINGTONE)
+                    1 -> android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
+                    2 -> android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION)
+                    3 -> null // 自定义录音
+                    else -> null
+                }
+                
                 viewModel.selectRingtone(which)
+                
+                if (uri != null) {
+                    // 预览铃声（播放 5 秒）
+                    currentMediaPlayer = MediaPlayer().apply {
+                        setDataSource(requireContext(), uri)
+                        setAudioStreamType(AudioManager.STREAM_RING)
+                        prepare()
+                        start()
+                        // 5 秒后停止
+                        android.os.Handler().postDelayed({
+                            if (isPlaying) stop()
+                            release()
+                        }, 5000)
+                    }
+                }
+                
                 Toast.makeText(
                     requireContext(),
                     "已选择：${ringtones[which]}",
                     Toast.LENGTH_SHORT
                 ).show()
+                
+                dialog.dismiss()
+            }
+            .setNegativeButton("取消") { dialog, _ ->
+                currentMediaPlayer?.apply {
+                    if (isPlaying) stop()
+                    release()
+                }
+                dialog.dismiss()
             }
             .show()
     }

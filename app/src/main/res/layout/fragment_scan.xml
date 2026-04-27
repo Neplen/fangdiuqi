@@ -11,7 +11,7 @@
         android:id="@+id/toolbar"
         android:layout_width="match_parent"
         android:layout_height="?attr/actionBarSize"
-        android:background="@color/primary"
+        android:background="?attr/colorPrimary"
         app:title="扫描设备"
         app:titleTextColor="@android:color/white">
 
@@ -35,7 +35,7 @@
         android:text="正在扫描附近设备..."
         android:textSize="16sp"
         android:textColor="@color/text_primary"
-        android:background="@color/surface" />
+        android:background="?attr/colorSurface" />
 
     <!-- 进度条 -->
     <com.google.android.material.progressindicator.LinearProgressIndicator

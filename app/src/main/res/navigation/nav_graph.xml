@@ -14,4 +14,13 @@
         android:name="com.monkeycode.blelostfinder.ui.settings.SettingsFragment"
         android:label="Settings" />
 
+    <fragment
+        android:id="@+id/navigation_scan"
+        android:name="com.monkeycode.blelostfinder.ui.scan.ScanFragment"
+        android:label="Scan" />
+
+    <action
+        android:id="@+id/action_scan"
+        app:destination="@id/navigation_scan" />
+
 </navigation>

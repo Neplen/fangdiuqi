@@ -133,6 +133,38 @@ class AlarmSoundManager @Inject constructor(
         }
     }
     
+    // 添加预览播放方法
+    fun previewRingtone(uri: android.net.Uri?) {
+        stopPlaying()
+        
+        try {
+            mediaPlayer = if (uri != null) {
+                MediaPlayer().apply {
+                    setDataSource(contextApp, uri)
+                    setAudioStreamType(AudioManager.STREAM_RING)
+                    setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ALARM)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    )
+                    prepare()
+                    isLooping = false  // 预览只播放一次
+                    start()
+                }
+            } else {
+                playDefaultAlarm()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to preview ringtone", e)
+        }
+    }
+    
+    // 停止预览并回放默认铃声（如果正在播放）
+    fun stopPreview() {
+        stopPlaying()
+    }
+    
     private fun playDefaultAlarm() {
         try {
             val alarmUri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)

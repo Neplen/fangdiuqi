@@ -1,24 +1,32 @@
 package com.monkeycode.blelostfinder.ble
 
 import android.annotation.SuppressLint
-import android.bluetooth.*
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
+import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.Context
-import android.os.Build
 import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import javax.inject.Inject
 import javax.inject.Singleton
 
-data class ScanResult(
+data class ScanResultWrapper(
     val device: BluetoothDevice,
     val rssi: Int,
-    val scanRecord: ScanRecord
+    val scanRecord: android.bluetooth.le.ScanRecord?
 ) {
-    val name: String get() = scanRecord.deviceName ?: device.name ?: "未知设备"
+    val name: String? get() = scanRecord?.deviceName ?: device.name
     val macAddress: String get() = device.address
 }
+
 @Singleton
 class BleScanner @Inject constructor(
     @ApplicationContext private val context: Context
@@ -28,7 +36,7 @@ class BleScanner @Inject constructor(
     }
 
     private var bluetoothAdapter: BluetoothAdapter? = null
-    private var scanner: BluetoothLeScanner? = null
+    private var scanner: android.bluetooth.le.BluetoothLeScanner? = null
     private var isScanning = false
 
     init {
@@ -46,7 +54,7 @@ class BleScanner @Inject constructor(
     }
 
     @SuppressLint("MissingPermission")
-    fun startScan(): Flow<ScanResult> = channelFlow {
+    fun startScan(): Flow<ScanResultWrapper> = channelFlow {
         if (!isBluetoothEnabled()) {
             Log.e(TAG, "Bluetooth not enabled")
             close()
@@ -65,17 +73,20 @@ class BleScanner @Inject constructor(
             override fun onScanResult(callbackType: Int, result: ScanResult) {
                 super.onScanResult(callbackType, result)
                 
-                val scanResult = ScanResult(
-                    device = result.device,
-                    rssi = result.rssi,
-                    scanRecord = result.scanRecord
-                )
-                
-                // 只发送给没有 name 的设备，或者 iTAG 相关设备
-                if (scanResult.name.isNotBlank() && 
-                    (scanResult.name.contains("iTAG", ignoreCase = true) || 
-                     scanResult.name.contains("iSearching", ignoreCase = true) ||
-                     scanResult.name.contains("Tag", ignoreCase = true))) {
+                // 过滤设备：只显示 iTAG 或类似设备
+                val deviceName = result.scanRecord?.deviceName ?: result.device?.name
+                if (!deviceName.isNullOrBlank() && 
+                    (deviceName.contains("iTAG", ignoreCase = true) || 
+                     deviceName.contains("iSearching", ignoreCase = true) ||
+                     deviceName.contains("Tag", ignoreCase = true) ||
+                     deviceName.contains("BL", ignoreCase = true))) {
+                    
+                    val scanResult = ScanResultWrapper(
+                        device = result.device,
+                        rssi = result.rssi,
+                        scanRecord = result.scanRecord
+                    )
+                    
                     trySend(scanResult)
                 }
             }
@@ -87,15 +98,13 @@ class BleScanner @Inject constructor(
             }
         }
 
-        val scanFilter = ScanFilter.Builder()
-            .build()
-
         val scanSettings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .build()
 
         try {
-            scanner.startScan(listOf(scanFilter), scanSettings, scanCallback)
+            // 不带过滤器扫描所有设备
+            scanner.startScan(emptyList<ScanFilter>(), scanSettings, scanCallback)
         } catch (e: SecurityException) {
             Log.e(TAG, "Permission denied", e)
             close()
@@ -103,7 +112,11 @@ class BleScanner @Inject constructor(
         }
 
         awaitClose {
-            scanner.stopScan(scanCallback)
+            try {
+                scanner.stopScan(scanCallback)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error stopping scan", e)
+            }
             isScanning = false
         }
     }
@@ -111,7 +124,11 @@ class BleScanner @Inject constructor(
     @SuppressLint("MissingPermission")
     fun stopScan() {
         if (isScanning) {
-            scanner?.stopScan(object : ScanCallback() {})
+            try {
+                scanner?.stopScan(object : ScanCallback() {})
+            } catch (e: Exception) {
+                Log.e(TAG, "Error stopping scan", e)
+            }
             isScanning = false
             Log.d(TAG, "Scan stopped")
         }

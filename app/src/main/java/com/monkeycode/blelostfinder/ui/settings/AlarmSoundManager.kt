@@ -135,12 +135,17 @@ class AlarmSoundManager @Inject constructor(
     
     private fun playDefaultAlarm() {
         try {
-            mediaPlayer = MediaPlayer.create(
-                contextApp,
-                android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM),
-                null,
-                AudioManager.STREAM_RING  // 使用响铃音量
-            )?.apply {
+            val alarmUri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
+            mediaPlayer = MediaPlayer().apply {
+                setDataSource(contextApp, alarmUri)
+                setAudioStreamType(AudioManager.STREAM_RING)
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ALARM)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+                prepare()
                 isLooping = true
                 start()
             }

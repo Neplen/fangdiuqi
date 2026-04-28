@@ -5,11 +5,13 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
+import androidx.activity.OnBackPressedCallback
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.viewModels
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.navigation.fragment.findNavController
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.snackbar.Snackbar
@@ -44,9 +46,27 @@ class ScanFragment : Fragment() {
         setupRecyclerView()
         setupObservers()
         setupClickListeners()
+        
+        // 处理系统返回键
+        setupBackPressHandler()
 
         // 自动开始扫描
         viewModel.startScan()
+    }
+    
+    private fun setupBackPressHandler() {
+        requireActivity().onBackPressedDispatcher.addCallback(
+            viewLifecycleOwner,
+            object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    try {
+                        findNavController().popBackStack()
+                    } catch (e: Exception) {
+                        activity?.finish()
+                    }
+                }
+            }
+        )
     }
 
     private fun setupRecyclerView() {
@@ -101,7 +121,13 @@ class ScanFragment : Fragment() {
         }
 
         binding.btnBack.setOnClickListener {
-            activity?.finish()
+            // 使用 Navigation 组件返回，而不是直接 finish
+            try {
+                androidx.navigation.fragment.findNavController().popBackStack()
+            } catch (e: Exception) {
+                // 如果 Navigation 失败，才使用 finish
+                activity?.finish()
+            }
         }
     }
 

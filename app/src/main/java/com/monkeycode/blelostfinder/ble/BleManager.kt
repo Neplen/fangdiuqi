@@ -151,58 +151,149 @@ class BleManager @Inject constructor(
     }
 
     fun initialize(): Boolean {
-        val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
-        bluetoothAdapter = bluetoothManager?.adapter
-        return bluetoothAdapter != null && bluetoothAdapter?.isEnabled == true
+        try {
+            val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+            bluetoothAdapter = bluetoothManager?.adapter
+            
+            if (bluetoothAdapter == null) {
+                Log.e(TAG, "设备不支持蓝牙")
+                return false
+            }
+            
+            if (!bluetoothAdapter!!.isEnabled) {
+                Log.w(TAG, "蓝牙未开启")
+                return false
+            }
+            
+            Log.d(TAG, "蓝牙适配器初始化成功")
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "蓝牙适配器初始化失败", e)
+            bluetoothAdapter = null
+            return false
+        }
     }
 
     @SuppressLint("MissingPermission")
     fun connect(macAddress: String): Flow<BleConnectionState> = channelFlow {
-        if (bluetoothAdapter == null) {
-            send(BleConnectionState.Error("Bluetooth adapter not initialized"))
-            close()
-            return@channelFlow
-        }
-
-        _connectionState.value = BleConnectionState.Connecting
-        send(BleConnectionState.Connecting)
-
-        bluetoothDevice = bluetoothAdapter?.getRemoteDevice(macAddress)
-        bluetoothDevice?.connectGatt(context, false, bleCallback)
-        
-        // Start RSSI polling
-        launch {
-            while (true) {
-                kotlinx.coroutines.delay(2000)
-                bluetoothGatt?.readRemoteRssi()
+        try {
+            if (bluetoothAdapter == null) {
+                Log.e(TAG, "Bluetooth adapter not initialized")
+                send(BleConnectionState.Error("蓝牙适配器未初始化，请先检查蓝牙状态"))
+                close()
+                return@channelFlow
             }
-        }
-        
-        awaitClose {
-            disconnect()
+            
+            if (!bluetoothAdapter!!.isEnabled) {
+                Log.e(TAG, "Bluetooth adapter not enabled")
+                send(BleConnectionState.Error("蓝牙未开启"))
+                close()
+                return@channelFlow
+            }
+
+            _connectionState.value = BleConnectionState.Connecting
+            send(BleConnectionState.Connecting)
+            
+            Log.d(TAG, "开始连接设备：$macAddress")
+
+            bluetoothDevice = try {
+                bluetoothAdapter?.getRemoteDevice(macAddress)
+            } catch (e: IllegalArgumentException) {
+                Log.e(TAG, "无效的 MAC 地址：$macAddress", e)
+                send(BleConnectionState.Error("无效的设备地址"))
+                close()
+                return@channelFlow
+            } catch (e: SecurityException) {
+                Log.e(TAG, "缺少蓝牙连接权限", e)
+                send(BleConnectionState.Error("缺少蓝牙连接权限"))
+                close()
+                return@channelFlow
+            }
+
+            try {
+                bluetoothDevice?.connectGatt(context, false, bleCallback)
+                Log.d(TAG, "GATT 连接已发起")
+            } catch (e: Exception) {
+                Log.e(TAG, "连接 GATT 失败", e)
+                send(BleConnectionState.Error("连接失败：${e.message}"))
+                close()
+                return@channelFlow
+            }
+            
+            // Start RSSI polling
+            launch {
+                try {
+                    while (true) {
+                        kotlinx.coroutines.delay(2000)
+                        if (bluetoothGatt != null && bluetoothGatt!!.connect()) {
+                            bluetoothGatt?.readRemoteRssi()
+                        } else {
+                            break
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "RSSI 轮询失败", e)
+                }
+            }
+            
+            awaitClose {
+                try {
+                    disconnect()
+                } catch (e: Exception) {
+                    Log.e(TAG, "关闭连接时出错", e)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "connect 方法异常", e)
+            send(BleConnectionState.Error("连接异常：${e.message}"))
+            close()
         }
     }
 
     @SuppressLint("MissingPermission")
     fun disconnect() {
-        bluetoothGatt?.let { gatt ->
-            _connectionState.value = BleConnectionState.Disconnecting
-            gatt.disconnect()
-            gatt.close()
-            bluetoothGatt = null
+        try {
+            bluetoothGatt?.let { gatt ->
+                try {
+                    _connectionState.value = BleConnectionState.Disconnecting
+                    gatt.disconnect()
+                    Log.d(TAG, "GATT 断开连接")
+                } catch (e: Exception) {
+                    Log.e(TAG, "断开 GATT 连接失败", e)
+                }
+                
+                try {
+                    gatt.close()
+                    Log.d(TAG, "GATT 已关闭")
+                } catch (e: Exception) {
+                    Log.e(TAG, "关闭 GATT 失败", e)
+                }
+                
+                bluetoothGatt = null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "disconnect 方法异常", e)
         }
     }
 
     @SuppressLint("MissingPermission")
     fun startAlarm() {
-        alertCharacteristic?.let { characteristic ->
-            bluetoothGatt?.writeCharacteristic(
-                characteristic.apply {
-                    value = byteArrayOf(ALERT_COMMAND)
-                    writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        try {
+            alertCharacteristic?.let { characteristic ->
+                try {
+                    bluetoothGatt?.writeCharacteristic(
+                        characteristic.apply {
+                            value = byteArrayOf(ALERT_COMMAND)
+                            writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                        }
+                    )
+                    Log.d(TAG, "Alarm started")
+                } catch (e: Exception) {
+                    Log.e(TAG, "startAlarm 写入特征值失败", e)
                 }
-            )
-            Log.d(TAG, "Alarm started")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "startAlarm 方法异常", e)
         }
     }
 
@@ -225,12 +316,27 @@ class BleManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     suspend fun readBatteryLevel(): Int? {
-        return withContext(Dispatchers.IO) {
-            batteryCharacteristic?.let { characteristic ->
-                bluetoothGatt?.readCharacteristic(characteristic)
-                kotlinx.coroutines.delay(500)
-                _batteryLevel.value
+        return try {
+            withContext(Dispatchers.IO) {
+                try {
+                    batteryCharacteristic?.let { characteristic ->
+                        try {
+                            bluetoothGatt?.readCharacteristic(characteristic)
+                            kotlinx.coroutines.delay(500)
+                            _batteryLevel.value
+                        } catch (e: Exception) {
+                            Log.e(TAG, "读取电池失败", e)
+                            null
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "readBatteryLevel 异常", e)
+                    null
+                }
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "readBatteryLevel 外部异常", e)
+            null
         }
     }
 

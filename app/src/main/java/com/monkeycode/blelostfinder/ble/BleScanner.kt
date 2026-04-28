@@ -44,9 +44,19 @@ class BleScanner @Inject constructor(
     }
 
     private fun initialize() {
-        val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
-        bluetoothAdapter = bluetoothManager?.adapter
-        scanner = bluetoothAdapter?.bluetoothLeScanner
+        try {
+            val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+            bluetoothAdapter = bluetoothManager?.adapter
+            scanner = bluetoothAdapter?.bluetoothLeScanner
+            
+            if (bluetoothAdapter == null) {
+                Log.e(TAG, "设备不支持蓝牙")
+            } else {
+                Log.d(TAG, "BleScanner 初始化成功")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "BleScanner 初始化失败", e)
+        }
     }
 
     fun isBluetoothEnabled(): Boolean {

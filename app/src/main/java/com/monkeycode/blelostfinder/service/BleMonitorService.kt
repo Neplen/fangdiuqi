@@ -82,22 +82,37 @@ class BleMonitorService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "Service started with intent: ${intent?.action}")
-        
-        when (intent?.action) {
-            ACTION_STOP_MONITORING -> {
-                stopMonitoring()
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-                return START_NOT_STICKY
+        try {
+            Log.d(TAG, "Service started with intent: ${intent?.action}")
+            
+            when (intent?.action) {
+                ACTION_STOP_MONITORING -> {
+                    stopMonitoring()
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
             }
+    
+            // 确保前台服务启动成功
+            try {
+                startForeground(NOTIFICATION_ID, createNotification())
+                Log.d(TAG, "前台服务启动成功")
+            } catch (e: Exception) {
+                Log.e(TAG, "startForeground 失败", e)
+                // 降级处理：尝试普通启动
+            }
+            
+            acquireWakeLock()
+            startMonitoring()
+            
+            Log.d(TAG, "监控服务启动完成")
+            return START_STICKY
+        } catch (e: Exception) {
+            Log.e(TAG, "onStartCommand 异常", e)
+            // 确保即使出错也返回 START_STICKY，让系统重试
+            return START_STICKY
         }
-
-        startForeground(NOTIFICATION_ID, createNotification())
-        acquireWakeLock()
-        startMonitoring()
-        
-        return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? {
@@ -194,39 +209,63 @@ class BleMonitorService : Service() {
 
         isMonitoring = true
         
-        serviceScope.launch {
-            deviceRepository.getDeviceByMac(deviceMac)?.let { device ->
-                currentDevice = device
-            } ?: run {
-                val defaultDevice = BleDevice(
-                    macAddress = deviceMac,
-                    name = "iTAG",
-                    rssiThreshold = DEFAULT_RSSI_THRESHOLD,
-                    alarmDelaySeconds = DEFAULT_ALARM_DELAY
-                )
-                deviceRepository.insertDevice(defaultDevice)
-                currentDevice = defaultDevice
+        try {
+            serviceScope.launch {
+                try {
+                    deviceRepository.getDeviceByMac(deviceMac)?.let { device ->
+                        currentDevice = device
+                    } ?: run {
+                        val defaultDevice = BleDevice(
+                            macAddress = deviceMac,
+                            name = "iTAG",
+                            rssiThreshold = DEFAULT_RSSI_THRESHOLD,
+                            alarmDelaySeconds = DEFAULT_ALARM_DELAY
+                        )
+                        deviceRepository.insertDevice(defaultDevice)
+                        currentDevice = defaultDevice
+                    }
+    
+                    bleManager.connect(deviceMac).onEach { state ->
+                        try {
+                            handleConnectionState(state)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "处理连接状态失败", e)
+                        }
+                    }.launchIn(this)
+                } catch (e: Exception) {
+                    Log.e(TAG, "设备加载失败", e)
+                }
             }
-
-            bleManager.connect(deviceMac).onEach { state ->
-                handleConnectionState(state)
-            }.launchIn(this)
-        }
-        
-        serviceScope.launch {
-            settingsManager.isWifiDndEnabled.collect { enabled ->
-                isWifiDndActive = enabled && isWifiConnected()
-                Log.d(TAG, "WiFi DND active: $isWifiDndActive")
+            
+            serviceScope.launch {
+                try {
+                    settingsManager.isWifiDndEnabled.collect { enabled ->
+                        isWifiDndActive = enabled && isWifiConnected()
+                        Log.d(TAG, "WiFi DND active: $isWifiDndActive")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "WiFi DND 收集失败", e)
+                }
             }
-        }
-        
-        serviceScope.launch {
-            bleManager.bleEvents.collect { event ->
-                handleBleEvent(event)
+            
+            serviceScope.launch {
+                try {
+                    bleManager.bleEvents.collect { event ->
+                        try {
+                            handleBleEvent(event)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "处理 BLE 事件失败", e)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "BLE 事件收集失败", e)
+                }
             }
+            
+            Log.d(TAG, "Monitoring started")
+        } catch (e: Exception) {
+            Log.e(TAG, "startMonitoring 异常", e)
         }
-        
-        Log.d(TAG, "Monitoring started")
     }
 
     private fun stopMonitoring() {

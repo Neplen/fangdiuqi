@@ -31,10 +31,23 @@ class AlarmSoundManager @Inject constructor(
     private val contextApp get() = context.applicationContext
     
     fun initializeRecordingDir() {
-        val audioDir = File(contextApp.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "alarms")
-        if (!audioDir.exists()) {
-            val created = audioDir.mkdirs()
-            Log.d(TAG, "创建录音目录：${audioDir.absolutePath}, 成功：$created")
+        try {
+            // 完整路径：/storage/emulated/0/Android/data/com.monkeycode.blelostfinder/files/Music/alarms/
+            val baseDir = contextApp.getExternalFilesDir(null)
+            if (baseDir == null) {
+                Log.e(TAG, "无法获取外部文件目录")
+                return
+            }
+            
+            val audioDir = File(baseDir, "Music/alarms")
+            if (!audioDir.exists()) {
+                val created = audioDir.mkdirs()
+                Log.d(TAG, "创建录音目录：${audioDir.absolutePath}, 成功：$created")
+            } else {
+                Log.d(TAG, "录音目录已存在：${audioDir.absolutePath}")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "创建录音目录失败", e)
         }
     }
     
@@ -42,8 +55,18 @@ class AlarmSoundManager @Inject constructor(
         // 确保目录存在
         initializeRecordingDir()
         
-        val audioDir = File(contextApp.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "alarms")
+        // 完整路径：/storage/emulated/0/Android/data/com.monkeycode.blelostfinder/files/Music/alarms/alarm_sound.m4a
+        val baseDir = contextApp.getExternalFilesDir(null)
+        if (baseDir == null) {
+            Log.e(TAG, "无法获取外部文件目录，使用默认路径")
+            val audioDir = File(contextApp.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "alarms")
+            val file = File(audioDir, RECORDING_FILE_NAME)
+            return file.absolutePath
+        }
+        
+        val audioDir = File(baseDir, "Music/alarms")
         val file = File(audioDir, RECORDING_FILE_NAME)
+        Log.d(TAG, "录音文件路径：${file.absolutePath}")
         return file.absolutePath
     }
     

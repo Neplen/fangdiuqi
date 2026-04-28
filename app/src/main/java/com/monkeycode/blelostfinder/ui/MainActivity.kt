@@ -54,11 +54,16 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(binding.root)
-        
-        setupNavigation()
-        checkPermissions()
+        try {
+            binding = ActivityMainBinding.inflate(layoutInflater)
+            setContentView(binding.root)
+            
+            setupNavigation()
+            checkPermissions()
+        } catch (e: Exception) {
+            Log.e(TAG, "onCreate 失败", e)
+            showSnackbar("APP 启动失败：${e.message}")
+        }
     }
     
     // 添加菜单支持

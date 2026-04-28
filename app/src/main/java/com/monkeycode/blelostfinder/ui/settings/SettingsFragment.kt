@@ -303,61 +303,69 @@ class SettingsFragment : Fragment() {
                             2 -> null // 自定义录音 - 不预览
                             else -> null
                         }
-                    
-                    if (previewUri != null) {
-                        currentMediaPlayer = MediaPlayer().apply {
-                            setDataSource(requireContext(), previewUri)
-                            setAudioStreamType(AudioManager.STREAM_RING)
-                            setAudioAttributes(
-                                AudioAttributes.Builder()
-                                    .setUsage(AudioAttributes.USAGE_ALARM)
-                                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                                    .build()
-                            )
-                            prepare()
-                            isLooping = false  // 预览只播放一次
-                            start()
+                        
+                        if (previewUri != null) {
+                            currentMediaPlayer = MediaPlayer().apply {
+                                setDataSource(requireContext(), previewUri)
+                                setAudioStreamType(AudioManager.STREAM_RING)
+                                setAudioAttributes(
+                                    AudioAttributes.Builder()
+                                        .setUsage(AudioAttributes.USAGE_ALARM)
+                                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                        .build()
+                                )
+                                prepare()
+                                isLooping = false  // 预览只播放一次
+                                start()
+                            }
+                            
+                            // 5 秒后自动停止预览
+                            Handler(Looper.getMainLooper()).postDelayed({
+                                try {
+                                    currentMediaPlayer?.apply {
+                                        if (isPlaying) stop()
+                                        release()
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "停止预览失败", e)
+                                }
+                            }, 5000)
                         }
                         
-                    // 5 秒后自动停止预览
-                    Handler(Looper.getMainLooper()).postDelayed({
-                        try {
-                            currentMediaPlayer?.apply {
-                                if (isPlaying) stop()
-                                release()
-                            }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "停止预览失败", e)
-                        }
-                    }, 5000)
+                        Toast.makeText(
+                            requireContext(),
+                            "已选择：${ringtones[which]}",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                        
+                    } catch (e: Exception) {
+                        Log.e(TAG, "铃声预览失败", e)
+                        Toast.makeText(
+                            requireContext(),
+                            "预览失败：${e.message}",
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
                     
-                    Toast.makeText(
-                        requireContext(),
-                        "已选择：${ringtones[which]}",
-                        Toast.LENGTH_SHORT
-                    ).show()
-                    
-                } catch (e: Exception) {
-                    Log.e("SettingsFragment", "铃声预览失败", e)
-                    Toast.makeText(
-                        requireContext(),
-                        "预览失败：${e.message}",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    dialog.dismiss()
                 }
-                
-                dialog.dismiss()
-            }
-            .setNegativeButton("取消") { dialog, _ ->
-                // 停止预览
-                currentMediaPlayer?.apply {
-                    if (isPlaying) stop()
-                    release()
+                .setNegativeButton("取消") { dialog, _ ->
+                    // 停止预览
+                    currentMediaPlayer?.apply {
+                        if (isPlaying) stop()
+                        release()
+                    }
+                    dialog.dismiss()
                 }
-                dialog.dismiss()
-            }
-            .show()
+                .show()
+        } catch (e: Exception) {
+            Log.e(TAG, "显示铃声选择器失败", e)
+            Toast.makeText(
+                requireContext(),
+                "铃声选择失败：${e.message}",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
     }
     
     override fun onDestroyView() {

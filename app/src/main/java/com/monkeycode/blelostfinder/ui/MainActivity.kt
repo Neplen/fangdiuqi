@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothAdapter
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
@@ -23,6 +24,9 @@ import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
 class MainActivity : AppCompatActivity() {
+    companion object {
+        private const val TAG = "BLELostFinder"
+    }
     
     private lateinit var binding: ActivityMainBinding
     
@@ -44,11 +48,18 @@ class MainActivity : AppCompatActivity() {
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        val allGranted = permissions.values.all { it }
-        if (allGranted) {
-            checkBluetoothAndStart()
-        } else {
-            showSnackbar("需要授予所有权限才能正常使用")
+        try {
+            val allGranted = permissions.values.all { it }
+            if (allGranted) {
+                checkBluetoothAndStart()
+            } else {
+                val deniedPermissions = permissions.filter { !it.value }.keys
+                Log.w(TAG, "权限被拒绝：$deniedPermissions")
+                showSnackbar("部分权限被拒绝，可能影响功能使用")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "权限处理失败", e)
+            showSnackbar("权限处理失败：${e.message}")
         }
     }
 

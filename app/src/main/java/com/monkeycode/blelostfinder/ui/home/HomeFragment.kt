@@ -77,6 +77,12 @@ class HomeFragment : Fragment() {
     }
     
     private fun setupClickListeners() {
+        binding.btnSearchDevice.setOnClickListener {
+            // 跳转到搜索设备页面
+            val navController = requireActivity().findNavController(R.id.nav_host_fragment)
+            navController.navigate(R.id.action_scan)
+        }
+        
         binding.btnFindDevice.setOnClickListener {
             viewModel.findDevice()
             Snackbar.make(binding.root, "正在让防丢器响铃...", Snackbar.LENGTH_SHORT).show()

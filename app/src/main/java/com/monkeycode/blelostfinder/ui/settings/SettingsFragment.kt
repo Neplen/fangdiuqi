@@ -2,6 +2,7 @@ package com.monkeycode.blelostfinder.ui.settings
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
 import android.os.Bundle

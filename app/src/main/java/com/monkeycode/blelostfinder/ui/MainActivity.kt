@@ -80,27 +80,47 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun checkPermissions() {
-        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            arrayOf(
-                Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            )
+        // 收集所有需要的权限
+        val allPermissions = mutableListOf<String>()
+        
+        // Android 12+ (API 31+) 需要新的蓝牙权限
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            allPermissions.add(Manifest.permission.BLUETOOTH_SCAN)
+            allPermissions.add(Manifest.permission.BLUETOOTH_CONNECT)
         } else {
-            arrayOf(
-                Manifest.permission.BLUETOOTH,
-                Manifest.permission.BLUETOOTH_ADMIN,
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION
-            )
+            // Android 11 及以下需要旧的蓝牙权限
+            allPermissions.add(Manifest.permission.BLUETOOTH)
+            allPermissions.add(Manifest.permission.BLUETOOTH_ADMIN)
         }
         
-        val needRequest = permissions.any {
+        // 所有版本都需要位置权限（BLE 扫描必需）
+        allPermissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
+        allPermissions.add(Manifest.permission.ACCESS_COARSE_LOCATION)
+        
+        // Android 13+ (API 33+) 需要媒体权限
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            allPermissions.add(Manifest.permission.READ_MEDIA_AUDIO)
+        } else {
+            // Android 12 及以下需要存储权限
+            allPermissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+            allPermissions.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+        
+        // 通知权限（Android 13+）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            allPermissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        
+        // 录音权限（所有版本）
+        allPermissions.add(Manifest.permission.RECORD_AUDIO)
+        
+        // 过滤掉已授权的权限
+        val needRequest = allPermissions.filter {
             ContextCompat.checkSelfPermission(this, it) != android.content.pm.PackageManager.PERMISSION_GRANTED
-        }
+        }.toTypedArray()
         
-        if (needRequest) {
-            permissionLauncher.launch(permissions)
+        if (needRequest.isNotEmpty()) {
+            permissionLauncher.launch(needRequest)
         } else {
             checkBluetoothAndStart()
         }

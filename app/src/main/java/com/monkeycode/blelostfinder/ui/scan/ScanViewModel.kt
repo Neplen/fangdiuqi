@@ -59,10 +59,10 @@ class ScanViewModel @Inject constructor(
 
     fun connectToDevice(scanResult: ScanResultWrapper) {
         viewModelScope.launch {
-            _isScanning.value = false
-            bleScanner.stopScan()
-
             try {
+                _isScanning.value = false
+                bleScanner.stopScan()
+
                 // 保存设备到数据库
                 val device = BleDevice(
                     macAddress = scanResult.macAddress,

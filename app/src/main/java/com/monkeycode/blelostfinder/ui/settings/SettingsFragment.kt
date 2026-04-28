@@ -273,35 +273,36 @@ class SettingsFragment : Fragment() {
     }
     
     private fun showRingtonePicker() {
+        // 移除蜂鸣声选项，只保留系统铃声和自定义录音
         val ringtones = listOf(
             "系统默认铃声",
             "警报声",
-            "蜂鸣声",
             "自定义录音"
         )
         
         var currentMediaPlayer: MediaPlayer? = null
         
-        MaterialAlertDialogBuilder(requireContext())
-            .setTitle("选择报警铃声（点击可预览）")
-            .setItems(ringtones.toTypedArray()) { dialog, which ->
-                // 停止之前的预览
-                currentMediaPlayer?.apply {
-                    if (isPlaying) stop()
-                    release()
-                }
-                
-                // 选择铃声
-                viewModel.selectRingtone(which)
-                
-                // 预览铃声（添加异常保护）
-                try {
-                    val previewUri = when (which) {
-                        0 -> android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_RINGTONE)
-                        1 -> android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
-                        2 -> null // 自定义录音 - 不预览
-                        else -> null
+        try {
+            MaterialAlertDialogBuilder(requireContext())
+                .setTitle("选择报警铃声（点击可预览）")
+                .setItems(ringtones.toTypedArray()) { dialog, which ->
+                    // 停止之前的预览
+                    currentMediaPlayer?.apply {
+                        if (isPlaying) stop()
+                        release()
                     }
+                    
+                    // 选择铃声
+                    viewModel.selectRingtone(which)
+                    
+                    // 预览铃声（添加异常保护）
+                    try {
+                        val previewUri = when (which) {
+                            0 -> android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_RINGTONE)
+                            1 -> android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
+                            2 -> null // 自定义录音 - 不预览
+                            else -> null
+                        }
                     
                     if (previewUri != null) {
                         currentMediaPlayer = MediaPlayer().apply {

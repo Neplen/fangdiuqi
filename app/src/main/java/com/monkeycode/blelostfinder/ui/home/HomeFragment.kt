@@ -67,6 +67,8 @@ class HomeFragment : Fragment() {
                     viewModel.batteryLevel.collect { level ->
                         if (level >= 0) {
                             binding.tvBattery.text = "$level%"
+                        } else {
+                            binding.tvBattery.text = "--%"
                         }
                     }
                 }

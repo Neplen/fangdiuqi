@@ -55,69 +55,74 @@ class BleScanner @Inject constructor(
 
     @SuppressLint("MissingPermission")
     fun startScan(): Flow<ScanResultWrapper> = channelFlow {
-        if (!isBluetoothEnabled()) {
-            Log.e(TAG, "Bluetooth not enabled")
-            close()
-            return@channelFlow
-        }
-
-        val scanner = bluetoothAdapter?.bluetoothLeScanner ?: run {
-            Log.e(TAG, "BluetoothLeScanner not available")
-            close()
-            return@channelFlow
-        }
-
-        isScanning = true
-
-        val scanCallback = object : ScanCallback() {
-            override fun onScanResult(callbackType: Int, result: ScanResult) {
-                super.onScanResult(callbackType, result)
-                
-                // 过滤设备：只显示 iTAG 或类似设备
-                val deviceName = result.scanRecord?.deviceName ?: result.device?.name
-                if (!deviceName.isNullOrBlank() && 
-                    (deviceName.contains("iTAG", ignoreCase = true) || 
-                     deviceName.contains("iSearching", ignoreCase = true) ||
-                     deviceName.contains("Tag", ignoreCase = true) ||
-                     deviceName.contains("BL", ignoreCase = true))) {
+        try {
+            if (!isBluetoothEnabled()) {
+                Log.e(TAG, "Bluetooth not enabled")
+                close()
+                return@channelFlow
+            }
+    
+            val scanner = bluetoothAdapter?.bluetoothLeScanner ?: run {
+                Log.e(TAG, "BluetoothLeScanner not available")
+                close()
+                return@channelFlow
+            }
+    
+            isScanning = true
+    
+            val scanCallback = object : ScanCallback() {
+                override fun onScanResult(callbackType: Int, result: ScanResult) {
+                    super.onScanResult(callbackType, result)
                     
-                    val scanResult = ScanResultWrapper(
-                        device = result.device,
-                        rssi = result.rssi,
-                        scanRecord = result.scanRecord
-                    )
-                    
-                    trySend(scanResult)
+                    try {
+                        // 不过滤设备，显示所有 BLE 设备
+                        val scanResult = ScanResultWrapper(
+                            device = result.device,
+                            rssi = result.rssi,
+                            scanRecord = result.scanRecord
+                        )
+                        
+                        trySend(scanResult)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "处理扫描结果失败", e)
+                    }
+                }
+    
+                override fun onScanFailed(errorCode: Int) {
+                    super.onScanFailed(errorCode)
+                    Log.e(TAG, "Scan failed: $errorCode")
+                    isScanning = false
                 }
             }
-
-            override fun onScanFailed(errorCode: Int) {
-                super.onScanFailed(errorCode)
-                Log.e(TAG, "Scan failed: $errorCode")
+    
+            val scanSettings = ScanSettings.Builder()
+                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .build()
+    
+            try {
+                // 不带过滤器扫描所有设备
+                scanner.startScan(emptyList<ScanFilter>(), scanSettings, scanCallback)
+            } catch (e: SecurityException) {
+                Log.e(TAG, "Permission denied", e)
+                close()
+                return@channelFlow
+            } catch (e: Exception) {
+                Log.e(TAG, "启动扫描失败", e)
+                close()
+                return@channelFlow
+            }
+    
+            awaitClose {
+                try {
+                    scanner.stopScan(scanCallback)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error stopping scan", e)
+                }
                 isScanning = false
             }
-        }
-
-        val scanSettings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-            .build()
-
-        try {
-            // 不带过滤器扫描所有设备
-            scanner.startScan(emptyList<ScanFilter>(), scanSettings, scanCallback)
-        } catch (e: SecurityException) {
-            Log.e(TAG, "Permission denied", e)
+        } catch (e: Exception) {
+            Log.e(TAG, "startScan 异常", e)
             close()
-            return@channelFlow
-        }
-
-        awaitClose {
-            try {
-                scanner.stopScan(scanCallback)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error stopping scan", e)
-            }
-            isScanning = false
         }
     }
 

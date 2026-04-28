@@ -64,11 +64,17 @@ class HomeViewModel @Inject constructor(
         Log.d("HomeViewModel", "触发防丢器响铃")
     }
     
-    fun findPhone() {
-        // 播放手机警报（循环播放）
-        alarmSoundManager.playAlarm(null)
-        Log.d("HomeViewModel", "触发手机响铃")
+fun findPhone() {
+    viewModelScope.launch {
+        try {
+            // 播放手机警报（循环播放）
+            alarmSoundManager.playAlarm(null)
+            Log.d("HomeViewModel", "触发手机响铃")
+        } catch (e: Exception) {
+            Log.e("HomeViewModel", "触发手机响铃失败", e)
+        }
     }
+}
     
     fun stopPhoneAlarm() {
         alarmSoundManager.stopPlaying()

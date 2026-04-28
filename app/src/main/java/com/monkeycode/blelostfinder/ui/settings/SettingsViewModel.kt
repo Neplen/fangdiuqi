@@ -59,10 +59,9 @@ class SettingsViewModel @Inject constructor(
     fun selectRingtone(type: Int) {
         viewModelScope.launch {
             val path = when (type) {
-                0 -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)?.toString()
-                1 -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)?.toString()
-                2 -> null
-                3 -> getCustomRecordingPath()
+                0 -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)?.toString()
+                1 -> RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)?.toString()
+                2 -> getCustomRecordingPath()
                 else -> null
             }
             settingsManager.updateAlarmRingtonePath(path)

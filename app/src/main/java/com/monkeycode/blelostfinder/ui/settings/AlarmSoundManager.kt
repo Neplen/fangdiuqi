@@ -30,11 +30,19 @@ class AlarmSoundManager @Inject constructor(
     
     private val contextApp get() = context.applicationContext
     
-    fun getRecordingFilePath(): String {
+    fun initializeRecordingDir() {
         val audioDir = File(contextApp.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "alarms")
         if (!audioDir.exists()) {
-            audioDir.mkdirs()
+            val created = audioDir.mkdirs()
+            Log.d(TAG, "创建录音目录：${audioDir.absolutePath}, 成功：$created")
         }
+    }
+    
+    fun getRecordingFilePath(): String {
+        // 确保目录存在
+        initializeRecordingDir()
+        
+        val audioDir = File(contextApp.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "alarms")
         val file = File(audioDir, RECORDING_FILE_NAME)
         return file.absolutePath
     }
@@ -170,6 +178,11 @@ class AlarmSoundManager @Inject constructor(
     private fun playDefaultAlarm() {
         try {
             val alarmUri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
+            if (alarmUri == null) {
+                Log.e(TAG, "默认报警铃能为空")
+                return
+            }
+            
             mediaPlayer = MediaPlayer().apply {
                 setDataSource(contextApp, alarmUri)
                 setAudioStreamType(AudioManager.STREAM_RING)

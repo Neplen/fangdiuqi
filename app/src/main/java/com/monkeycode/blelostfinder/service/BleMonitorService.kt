@@ -113,8 +113,12 @@ class BleMonitorService : Service() {
     }
 
     private fun initialize() {
-        if (!bleManager.initialize()) {
-            Log.e(TAG, "Failed to initialize BLE")
+        try {
+            if (!bleManager.initialize()) {
+                Log.e(TAG, "Failed to initialize BLE")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "BLE 初始化失败", e)
         }
     }
 
@@ -305,7 +309,8 @@ class BleMonitorService : Service() {
                 val ringtonePath = settingsManager.alarmRingtonePath.firstOrNull()
                 alarmSoundManager.playAlarm(ringtonePath)
             } catch (e: Exception) {
-                Log.e(TAG, "Error playing alarm", e)
+                Log.e(TAG, "触发报警失败", e)
+                isAlarmPlaying = false
             }
         }
     }

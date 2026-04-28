@@ -208,14 +208,18 @@ class BleManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     fun stopAlarm() {
-        alertCharacteristic?.let { characteristic ->
-            bluetoothGatt?.writeCharacteristic(
-                characteristic.apply {
-                    value = byteArrayOf(ALERT_STOP_COMMAND)
-                    writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                }
-            )
-            Log.d(TAG, "Alarm stopped")
+        try {
+            alertCharacteristic?.let { characteristic ->
+                bluetoothGatt?.writeCharacteristic(
+                    characteristic.apply {
+                        value = byteArrayOf(ALERT_STOP_COMMAND)
+                        writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                    }
+                )
+                Log.d(TAG, "Alarm stopped")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "stopAlarm 失败", e)
         }
     }
 

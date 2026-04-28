@@ -106,9 +106,13 @@ class ScanFragment : Fragment() {
     }
 
     override fun onDestroyView() {
-        super.onDestroyView()
-        _binding = null
-        viewModel.stopScan()
+        try {
+            super.onDestroyView()
+            _binding = null
+            viewModel.stopScan()
+        } catch (e: Exception) {
+            // 忽略清理错误
+        }
     }
 }
 

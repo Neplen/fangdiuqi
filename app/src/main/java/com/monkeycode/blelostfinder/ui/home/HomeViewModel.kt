@@ -11,6 +11,7 @@ import com.monkeycode.blelostfinder.data.local.SettingsManager
 import com.monkeycode.blelostfinder.data.model.BleDevice
 import com.monkeycode.blelostfinder.data.repository.DeviceRepository
 import com.monkeycode.blelostfinder.service.BleMonitorService
+import com.monkeycode.blelostfinder.ui.settings.AlarmSoundManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,7 +25,8 @@ class HomeViewModel @Inject constructor(
     application: Application,
     private val bleManager: BleManager,
     private val deviceRepository: DeviceRepository,
-    private val settingsManager: SettingsManager
+    private val settingsManager: SettingsManager,
+    private val alarmSoundManager: AlarmSoundManager
 ) : AndroidViewModel(application) {
     
     private val _connectionState = MutableStateFlow<BleConnectionState>(BleConnectionState.Disconnected)
@@ -59,9 +61,18 @@ class HomeViewModel @Inject constructor(
     
     fun findDevice() {
         bleManager.startAlarm()
+        Log.d("HomeViewModel", "触发防丢器响铃")
     }
     
     fun findPhone() {
+        // 播放手机警报（循环播放）
+        alarmSoundManager.playAlarm(null)
+        Log.d("HomeViewModel", "触发手机响铃")
+    }
+    
+    fun stopPhoneAlarm() {
+        alarmSoundManager.stopPlaying()
+        Log.d("HomeViewModel", "停止手机响铃")
     }
     
     fun startMonitoring() {

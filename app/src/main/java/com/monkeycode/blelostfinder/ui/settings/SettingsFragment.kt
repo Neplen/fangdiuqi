@@ -7,6 +7,7 @@ import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.Handler
 import android.text.format.DateFormat
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -275,41 +276,66 @@ class SettingsFragment : Fragment() {
                     release()
                 }
                 
-                // 选择并预览铃声
-                val uri = when (which) {
-                    0 -> android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_RINGTONE)
-                    1 -> android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
-                    2 -> android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION)
-                    3 -> null // 自定义录音
-                    else -> null
-                }
-                
+                // 选择铃声
                 viewModel.selectRingtone(which)
                 
-                if (uri != null) {
-                    // 预览铃声（播放 5 秒）
-                    currentMediaPlayer = MediaPlayer().apply {
-                        setDataSource(requireContext(), uri)
-                        setAudioStreamType(AudioManager.STREAM_RING)
-                        prepare()
-                        start()
-                        // 5 秒后停止
-                        android.os.Handler().postDelayed({
-                            if (isPlaying) stop()
-                            release()
+                // 预览铃声（添加异常保护）
+                try {
+                    val previewUri = when (which) {
+                        0 -> android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_RINGTONE)
+                        1 -> android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
+                        2 -> android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION)
+                        3 -> null // 自定义录音 - 不预览
+                        else -> null
+                    }
+                    
+                    if (previewUri != null) {
+                        currentMediaPlayer = MediaPlayer().apply {
+                            setDataSource(requireContext(), previewUri)
+                            setAudioStreamType(AudioManager.STREAM_RING)
+                            setAudioAttributes(
+                                AudioAttributes.Builder()
+                                    .setUsage(AudioAttributes.USAGE_ALARM)
+                                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                    .build()
+                            )
+                            prepare()
+                            isLooping = false  // 预览只播放一次
+                            start()
+                        }
+                        
+                        // 5 秒后自动停止预览
+                        Handler().postDelayed({
+                            try {
+                                currentMediaPlayer?.apply {
+                                    if (isPlaying) stop()
+                                    release()
+                                }
+                            } catch (e: Exception) {
+                                Log.e("SettingsFragment", "停止预览失败", e)
+                            }
                         }, 5000)
                     }
+                    
+                    Toast.makeText(
+                        requireContext(),
+                        "已选择：${ringtones[which]}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    
+                } catch (e: Exception) {
+                    Log.e("SettingsFragment", "铃声预览失败", e)
+                    Toast.makeText(
+                        requireContext(),
+                        "预览失败：${e.message}",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 }
-                
-                Toast.makeText(
-                    requireContext(),
-                    "已选择：${ringtones[which]}",
-                    Toast.LENGTH_SHORT
-                ).show()
                 
                 dialog.dismiss()
             }
             .setNegativeButton("取消") { dialog, _ ->
+                // 停止预览
                 currentMediaPlayer?.apply {
                     if (isPlaying) stop()
                     release()

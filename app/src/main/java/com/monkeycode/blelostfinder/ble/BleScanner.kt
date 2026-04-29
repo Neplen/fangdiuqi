@@ -73,14 +73,16 @@ class BleScanner @Inject constructor(
             
             if (currentAdapter == null) {
                 Log.e(TAG, "设备不支持蓝牙")
-                send(BleConnectionState.Error("设备不支持蓝牙"))
+                // 扫描方法只返回 ScanResultWrapper 类型，不能返回 BleConnectionState
+                // 直接关闭流，不发送任何数据
                 close()
                 return@channelFlow
             }
             
             if (!currentAdapter.isEnabled) {
                 Log.e(TAG, "蓝牙未开启")
-                send(BleConnectionState.Error("请先开启蓝牙"))
+                // 扫描方法只返回 ScanResultWrapper 类型，不能返回 BleConnectionState
+                // 直接关闭流，不发送任何数据
                 close()
                 return@channelFlow
             }

@@ -123,7 +123,7 @@ class ScanFragment : Fragment() {
         binding.btnBack.setOnClickListener {
             // 使用 Navigation 组件返回，而不是直接 finish
             try {
-                androidx.navigation.fragment.findNavController().popBackStack()
+                findNavController().popBackStack()
             } catch (e: Exception) {
                 // 如果 Navigation 失败，才使用 finish
                 activity?.finish()

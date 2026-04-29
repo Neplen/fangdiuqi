@@ -42,6 +42,9 @@ class HomeViewModel @Inject constructor(
     private val _isDeviceAlarmPlaying = MutableStateFlow(false)
     val isDeviceAlarmPlaying: StateFlow<Boolean> = _isDeviceAlarmPlaying.asStateFlow()
     
+    // 手机报警状态
+    private var isPhoneAlarmPlaying = false
+    
     // 手机报警弹窗触发
     private val _phoneAlarmTriggered = MutableStateFlow(false)
     val phoneAlarmTriggered: StateFlow<Boolean> = _phoneAlarmTriggered.asStateFlow()
@@ -77,9 +80,14 @@ class HomeViewModel @Inject constructor(
                         Log.d("HomeViewModel", "检测到防丢器单击，忽略")
                     }
                     is BleEvent.DoubleButtonPressed -> {
-                        // 双击触发手机报警
-                        Log.d("HomeViewModel", "检测到防丢器双击，触发手机报警")
-                        triggerPhoneAlarm()
+                        // 双击处理：如果正在报警则停止，否则触发报警
+                        if (isPhoneAlarmPlaying) {
+                            Log.d("HomeViewModel", "检测到防丢器双击，正在报警中，停止报警")
+                            stopPhoneAlarm()
+                        } else {
+                            Log.d("HomeViewModel", "检测到防丢器双击，触发手机报警")
+                            triggerPhoneAlarm()
+                        }
                     }
                     else -> {}
                 }
@@ -126,10 +134,12 @@ class HomeViewModel @Inject constructor(
                 // 先停止之前的铃声，防止叠加
                 alarmSoundManager.stopPlaying()
                 // 播放手机警报（循环播放）
-                alarmSoundManager.playAlarm(null)
+                val ringtonePath = settingsManager.alarmRingtonePath.firstOrNull()
+                alarmSoundManager.playAlarm(ringtonePath)
                 // 触发弹窗
                 _phoneAlarmTriggered.value = true
-                Log.d("HomeViewModel", "触发手机响铃")
+                isPhoneAlarmPlaying = true
+                Log.d("HomeViewModel", "触发手机响铃，铃声类型：${ringtonePath ?: "默认"}")
             } catch (e: Exception) {
                 Log.e("HomeViewModel", "触发手机响铃失败", e)
             }
@@ -141,6 +151,7 @@ class HomeViewModel @Inject constructor(
             try {
                 alarmSoundManager.stopPlaying()
                 _phoneAlarmTriggered.value = false
+                isPhoneAlarmPlaying = false
                 Log.d("HomeViewModel", "停止手机响铃")
             } catch (e: Exception) {
                 Log.e("HomeViewModel", "停止手机响铃失败", e)

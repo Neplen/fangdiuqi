@@ -4,6 +4,7 @@ import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.MediaPlayer
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Bundle
 import android.text.format.DateFormat
@@ -18,9 +19,11 @@ import androidx.fragment.app.viewModels
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.navigation.fragment.findNavController
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.timepicker.MaterialTimePicker
 import com.google.android.material.timepicker.TimeFormat
+import com.monkeycode.blelostfinder.R
 import com.monkeycode.blelostfinder.databinding.FragmentSettingsBinding
 import com.monkeycode.blelostfinder.util.PermissionHelper
 import dagger.hilt.android.AndroidEntryPoint
@@ -171,6 +174,19 @@ class SettingsFragment : Fragment() {
             PermissionHelper.openAppSettings(requireContext())
         }
         
+        binding.btnHome.setOnClickListener {
+            // 直接跳转到主页
+            try {
+                findNavController().popBackStack(
+                    R.id.navigation_home,
+                    inclusive = false
+                )
+            } catch (e: Exception) {
+                // 如果 Navigation 失败，才使用 finish
+                activity?.finish()
+            }
+        }
+        
         binding.btnRingtone.setOnClickListener {
             showRingtonePicker()
         }
@@ -200,6 +216,7 @@ class SettingsFragment : Fragment() {
     
     private fun showRingtonePicker() {
         val options = arrayOf(
+            "报警声",
             "选择本地铃声文件",
             "使用系统默认铃声"
         )
@@ -208,8 +225,15 @@ class SettingsFragment : Fragment() {
             .setTitle("选择报警铃声")
             .setItems(options) { dialog, which ->
                 when (which) {
-                    0 -> openFilePicker()
-                    1 -> {
+                    0 -> {
+                        // 报警声：使用系统默认闹钟铃声（固定提示音）
+                        val alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                        viewModel.saveRingtoneUri(alarmUri?.toString() ?: "")
+                        alarmUri?.let { previewRingtone(it) }
+                        Toast.makeText(requireContext(), "已选择报警声", Toast.LENGTH_SHORT).show()
+                    }
+                    1 -> openFilePicker()
+                    2 -> {
                         // 使用系统默认铃声
                         viewModel.saveRingtoneUri("")
                         Toast.makeText(requireContext(), "已选择系统默认铃声", Toast.LENGTH_SHORT).show()

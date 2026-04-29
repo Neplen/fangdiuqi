@@ -55,10 +55,21 @@
 
     <!-- 底部按钮 -->
     <com.google.android.material.button.MaterialButton
+        android:id="@+id/btn_home"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginBottom="8dp"
+        android:text="主页"
+        android:textSize="16sp"
+        style="@style/Widget.Material3.Button.OutlinedButton" />
+
+    <com.google.android.material.button.MaterialButton
         android:id="@+id/btn_scan"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_margin="16dp"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginBottom="16dp"
         android:text="重新扫描"
         android:textSize="16sp"
         style="@style/Widget.Material3.Button.ElevatedButton" />

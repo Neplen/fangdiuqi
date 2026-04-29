@@ -60,19 +60,32 @@ class BleScanner @Inject constructor(
     }
 
     fun isBluetoothEnabled(): Boolean {
-        return bluetoothAdapter != null && bluetoothAdapter?.isEnabled == true
+        // 每次检查都重新获取蓝牙适配器，确保用户手动开启蓝牙后能正确检测到
+        val bluetoothAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+        return bluetoothAdapter != null && bluetoothAdapter.isEnabled
     }
 
     @SuppressLint("MissingPermission")
     fun startScan(): Flow<ScanResultWrapper> = channelFlow {
         try {
-            if (!isBluetoothEnabled()) {
-                Log.e(TAG, "Bluetooth not enabled")
+            // 重新获取蓝牙适配器，确保用户手动开启蓝牙后能正确检测
+            val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+            
+            if (currentAdapter == null) {
+                Log.e(TAG, "设备不支持蓝牙")
+                send(BleConnectionState.Error("设备不支持蓝牙"))
+                close()
+                return@channelFlow
+            }
+            
+            if (!currentAdapter.isEnabled) {
+                Log.e(TAG, "蓝牙未开启")
+                send(BleConnectionState.Error("请先开启蓝牙"))
                 close()
                 return@channelFlow
             }
     
-            val scanner = bluetoothAdapter?.bluetoothLeScanner ?: run {
+            val scanner = currentAdapter.bluetoothLeScanner ?: run {
                 Log.e(TAG, "BluetoothLeScanner not available")
                 close()
                 return@channelFlow

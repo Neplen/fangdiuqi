@@ -177,19 +177,26 @@ class BleManager @Inject constructor(
     @SuppressLint("MissingPermission")
     fun connect(macAddress: String): Flow<BleConnectionState> = channelFlow {
         try {
-            if (bluetoothAdapter == null) {
-                Log.e(TAG, "Bluetooth adapter not initialized")
-                send(BleConnectionState.Error("蓝牙适配器未初始化，请先检查蓝牙状态"))
+            // 关键修复：每次连接前都重新获取蓝牙适配器
+            // 这样即使用户在 APP 启动后手动开启蓝牙，也能正确获取到适配器
+            val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+            
+            if (currentAdapter == null) {
+                Log.e(TAG, "设备不支持蓝牙")
+                send(BleConnectionState.Error("设备不支持蓝牙"))
                 close()
                 return@channelFlow
             }
             
-            if (!bluetoothAdapter!!.isEnabled) {
-                Log.e(TAG, "Bluetooth adapter not enabled")
-                send(BleConnectionState.Error("蓝牙未开启"))
+            if (!currentAdapter.isEnabled) {
+                Log.e(TAG, "蓝牙未开启")
+                send(BleConnectionState.Error("请先开启蓝牙"))
                 close()
                 return@channelFlow
             }
+            
+            // 更新本地的适配器引用
+            bluetoothAdapter = currentAdapter
 
             _connectionState.value = BleConnectionState.Connecting
             send(BleConnectionState.Connecting)
@@ -197,7 +204,7 @@ class BleManager @Inject constructor(
             Log.d(TAG, "开始连接设备：$macAddress")
 
             bluetoothDevice = try {
-                bluetoothAdapter?.getRemoteDevice(macAddress)
+                currentAdapter.getRemoteDevice(macAddress)
             } catch (e: IllegalArgumentException) {
                 Log.e(TAG, "无效的 MAC 地址：$macAddress", e)
                 send(BleConnectionState.Error("无效的设备地址"))
@@ -225,10 +232,15 @@ class BleManager @Inject constructor(
                 try {
                     while (true) {
                         kotlinx.coroutines.delay(2000)
-                        if (bluetoothGatt != null && bluetoothGatt!!.connect()) {
+                        // 检查蓝牙适配器状态
+                        if (bluetoothAdapter == null || !bluetoothAdapter!!.isEnabled) {
+                            Log.e(TAG, "蓝牙适配器不可用，停止 RSSI 轮询")
+                            break
+                        }
+                        if (bluetoothGatt != null) {
                             bluetoothGatt?.readRemoteRssi()
                         } else {
-                            break
+                            Log.d(TAG, "GATT 未连接，等待重连")
                         }
                     }
                 } catch (e: Exception) {

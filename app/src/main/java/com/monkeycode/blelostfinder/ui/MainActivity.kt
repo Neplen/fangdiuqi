@@ -2,7 +2,10 @@ package com.monkeycode.blelostfinder.ui
 
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -35,13 +38,67 @@ class MainActivity : AppCompatActivity() {
     ) { result ->
         try {
             if (result.resultCode == RESULT_OK) {
-                startMonitorService()
+                Log.d(TAG, "用户同意开启蓝牙，等待 1 秒后启动服务")
+                // 延迟启动，给系统时间初始化蓝牙适配器
+                binding.root.postDelayed({
+                    try {
+                        val adapter = BluetoothAdapter.getDefaultAdapter()
+                        if (adapter != null && adapter.isEnabled) {
+                            Log.d(TAG, "蓝牙已开启，启动监控服务")
+                            startMonitorService()
+                        } else {
+                            Log.e(TAG, "蓝牙开启检查失败")
+                            showSnackbar("蓝牙开启失败，请重试")
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "蓝牙状态检查失败", e)
+                        showSnackbar("蓝牙操作失败：${e.message}")
+                    }
+                }, 1000)
             } else {
+                Log.w(TAG, "用户拒绝开启蓝牙")
                 showSnackbar("需要开启蓝牙才能使用此功能")
             }
         } catch (e: Exception) {
             Log.e(TAG, "蓝牙开启结果处理失败", e)
             showSnackbar("蓝牙操作失败：${e.message}")
+        }
+    }
+    
+    // 蓝牙状态变化广播接收器
+    private val bluetoothReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            try {
+                val action = intent?.action
+                if (action == BluetoothAdapter.ACTION_STATE_CHANGED) {
+                    val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+                    when (state) {
+                        BluetoothAdapter.STATE_ON -> {
+                            Log.d(TAG, "蓝牙已开启，启动服务")
+                            // 延迟启动，确保适配器完全初始化
+                            binding.root.postDelayed({
+                                try {
+                                    startMonitorService()
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "蓝牙开启后启动服务失败", e)
+                                }
+                            }, 1000)
+                        }
+                        BluetoothAdapter.STATE_OFF -> {
+                            Log.w(TAG, "蓝牙已关闭")
+                            showSnackbar("蓝牙已关闭，部分功能可能无法使用")
+                        }
+                        BluetoothAdapter.STATE_TURNING_ON -> {
+                            Log.d(TAG, "蓝牙正在开启...")
+                        }
+                        BluetoothAdapter.STATE_TURNING_OFF -> {
+                            Log.d(TAG, "蓝牙正在关闭...")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "蓝牙状态变化处理失败", e)
+            }
         }
     }
     
@@ -70,10 +127,26 @@ class MainActivity : AppCompatActivity() {
             setContentView(binding.root)
             
             setupNavigation()
+            
+            // 注册蓝牙状态广播接收器
+            val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
+            registerReceiver(bluetoothReceiver, filter)
+            Log.d(TAG, "注册蓝牙广播接收器")
+            
             checkPermissions()
         } catch (e: Exception) {
             Log.e(TAG, "onCreate 失败", e)
             showSnackbar("APP 启动失败：${e.message}")
+        }
+    }
+    
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            unregisterReceiver(bluetoothReceiver)
+            Log.d(TAG, "注销蓝牙广播接收器")
+        } catch (e: Exception) {
+            Log.e(TAG, "注销广播接收器失败", e)
         }
     }
     

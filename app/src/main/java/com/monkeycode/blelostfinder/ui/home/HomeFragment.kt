@@ -151,6 +151,7 @@ class HomeFragment : Fragment() {
             .setTitle("[$deviceName] 正在寻找您的手机")
             .setMessage("按下防丢器按钮两次可以停止报警")
             .setPositiveButton("好的") { _, _ ->
+                // 强制停止所有铃声
                 viewModel.stopPhoneAlarm()
                 dismissAlarmDialog()
             }

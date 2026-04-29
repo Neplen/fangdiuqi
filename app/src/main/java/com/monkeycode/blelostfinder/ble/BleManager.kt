@@ -23,6 +23,10 @@ class BleManager @Inject constructor(
     companion object {
         private const val TAG = "BleManager"
         
+        // 双击检测时间窗口（毫秒）
+        private const val DOUBLE_PRESS_TIMEOUT = 2000L
+        private var lastButtonPressTime = 0L
+        
         // iTAG Device Info
         const val I_DEVICE_NAME = "iTAG"
         const val I_DEVICE_MAC = "FF:FF:11:8C:4E:3B"
@@ -131,9 +135,21 @@ class BleManager @Inject constructor(
         private fun onCharacteristicValueChanged(characteristic: BluetoothGattCharacteristic, value: ByteArray) {
             Log.d(TAG, "Characteristic changed: ${characteristic.uuid}, value: ${value.contentToString()}")
             if (characteristic.uuid == CUSTOM_CHARACTERISTIC_UUID) {
-                // Button pressed event
-                kotlinx.coroutines.GlobalScope.launch {
-                    _bleEvents.emit(BleEvent.ButtonPressed)
+                // 双击检测逻辑：2 秒内按两次才算双击
+                val currentTime = System.currentTimeMillis()
+                val lastPressTime = lastButtonPressTime
+                
+                if (currentTime - lastPressTime < DOUBLE_PRESS_TIMEOUT) {
+                    // 检测为双击
+                    lastButtonPressTime = 0
+                    kotlinx.coroutines.GlobalScope.launch {
+                        _bleEvents.emit(BleEvent.DoubleButtonPressed)
+                    }
+                    Log.d(TAG, "检测到双击事件")
+                } else {
+                    // 单击，记录时间
+                    lastButtonPressTime = currentTime
+                    Log.d(TAG, "检测到单击事件，等待第二次点击")
                 }
             }
         }

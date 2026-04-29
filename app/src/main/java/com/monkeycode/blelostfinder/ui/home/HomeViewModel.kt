@@ -73,8 +73,12 @@ class HomeViewModel @Inject constructor(
             bleManager.bleEvents.collect { event ->
                 when (event) {
                     is BleEvent.ButtonPressed -> {
-                        // 防丢器按钮按下，触发手机报警
-                        Log.d("HomeViewModel", "检测到防丢器按钮按下，触发手机报警")
+                        // 单击不触发任何报警
+                        Log.d("HomeViewModel", "检测到防丢器单击，忽略")
+                    }
+                    is BleEvent.DoubleButtonPressed -> {
+                        // 双击触发手机报警
+                        Log.d("HomeViewModel", "检测到防丢器双击，触发手机报警")
                         triggerPhoneAlarm()
                     }
                     else -> {}
@@ -119,6 +123,8 @@ class HomeViewModel @Inject constructor(
     fun triggerPhoneAlarm() {
         viewModelScope.launch {
             try {
+                // 先停止之前的铃声，防止叠加
+                alarmSoundManager.stopPlaying()
                 // 播放手机警报（循环播放）
                 alarmSoundManager.playAlarm(null)
                 // 触发弹窗

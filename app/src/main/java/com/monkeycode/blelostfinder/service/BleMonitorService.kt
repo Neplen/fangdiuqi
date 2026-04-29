@@ -320,8 +320,13 @@ class BleMonitorService : Service() {
         serviceScope.launch {
             when (event) {
                 is BleEvent.ButtonPressed -> {
-                    Log.d(TAG, "Device button pressed - trigger phone alarm")
-                    triggerPhoneAlarm("防丢器按键触发")
+                    // 单击不触发任何报警
+                    Log.d(TAG, "Device button single press - ignored")
+                }
+                is BleEvent.DoubleButtonPressed -> {
+                    // 双击触发手机报警
+                    Log.d(TAG, "Device button double press - trigger phone alarm")
+                    triggerPhoneAlarm("防丢器双击触发")
                 }
                 else -> {}
             }
@@ -333,7 +338,10 @@ class BleMonitorService : Service() {
     }
 
     private fun triggerPhoneAlarm(reason: String) {
-        if (isAlarmPlaying) return
+        if (isAlarmPlaying) {
+            Log.d(TAG, "Alarm already playing, skipping")
+            return
+        }
         
         if (isInDndMode()) {
             Log.d(TAG, "In DND mode, not triggering alarm: $reason")
@@ -345,6 +353,8 @@ class BleMonitorService : Service() {
         
         serviceScope.launch {
             try {
+                // 先停止之前的铃声，防止叠加
+                alarmSoundManager.stopPlaying()
                 val ringtonePath = settingsManager.alarmRingtonePath.firstOrNull()
                 alarmSoundManager.playAlarm(ringtonePath)
             } catch (e: Exception) {

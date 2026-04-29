@@ -1,10 +1,11 @@
 package com.monkeycode.blelostfinder.ui.settings
 
 import android.content.Intent
+import android.media.AudioAttributes
+import android.media.AudioManager
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.text.format.DateFormat
 import android.util.Log
 import android.view.LayoutInflater
@@ -24,7 +25,6 @@ import com.monkeycode.blelostfinder.databinding.FragmentSettingsBinding
 import com.monkeycode.blelostfinder.util.PermissionHelper
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
-import java.io.File
 import java.util.*
 
 @AndroidEntryPoint
@@ -281,3 +281,4 @@ class SettingsFragment : Fragment() {
         super.onDestroyView()
         _binding = null
     }
+}

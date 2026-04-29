@@ -10,6 +10,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.fragment.findNavController
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import com.monkeycode.blelostfinder.R
 import com.monkeycode.blelostfinder.ble.BleConnectionState
@@ -25,6 +26,11 @@ class HomeFragment : Fragment() {
     private val binding get() = _binding!!
     
     private val viewModel: HomeViewModel by viewModels()
+    
+    // 报警状态标记
+    private var isAlarmPlaying = false
+    // 弹窗引用
+    private var alarmDialog: androidx.appcompat.app.AlertDialog? = null
     
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -73,24 +79,31 @@ class HomeFragment : Fragment() {
                         }
                     }
                 }
+                
+                launch {
+                    viewModel.isDeviceAlarmPlaying.collect { isPlaying ->
+                        updateAlarmButton(isPlaying)
+                    }
+                }
+                
+                launch {
+                    viewModel.phoneAlarmTriggered.collect { triggered ->
+                        if (triggered) {
+                            showPhoneAlarmDialog()
+                        }
+                    }
+                }
             }
         }
     }
     
     private fun setupClickListeners() {
         binding.btnSearchDevice.setOnClickListener {
-            // 跳转到搜索设备页面
             findNavController().navigate(R.id.action_scan)
         }
         
-        binding.btnFindDevice.setOnClickListener {
-            viewModel.findDevice()
-            Snackbar.make(binding.root, "正在让防丢器响铃...", Snackbar.LENGTH_SHORT).show()
-        }
-        
-        binding.btnFindPhone.setOnClickListener {
-            viewModel.findPhone()
-            Snackbar.make(binding.root, "按下防丢器按钮来查找手机", Snackbar.LENGTH_SHORT).show()
+        binding.btnAlarmDevice.setOnClickListener {
+            toggleDeviceAlarm()
         }
         
         binding.switchMonitor.setOnCheckedChangeListener { _, isChecked ->
@@ -100,6 +113,54 @@ class HomeFragment : Fragment() {
                 viewModel.stopMonitoring()
             }
         }
+    }
+    
+    private fun toggleDeviceAlarm() {
+        if (isAlarmPlaying) {
+            // 停止报警
+            viewModel.stopDeviceAlarm()
+            isAlarmPlaying = false
+            updateAlarmButton(false)
+            Snackbar.make(binding.root, "已停止报警", Snackbar.LENGTH_SHORT).show()
+        } else {
+            // 启动报警
+            viewModel.startDeviceAlarm()
+            isAlarmPlaying = true
+            updateAlarmButton(true)
+            Snackbar.make(binding.root, "正在让防丢器响铃...", Snackbar.LENGTH_SHORT).show()
+        }
+    }
+    
+    private fun updateAlarmButton(isPlaying: Boolean) {
+        if (isPlaying) {
+            binding.btnAlarmDevice.text = "停止报警"
+            binding.btnAlarmDevice.setIconResource(android.R.drawable.ic_media_pause)
+        } else {
+            binding.btnAlarmDevice.text = "点击报警"
+            binding.btnAlarmDevice.setIconResource(android.R.drawable.ic_dialog_alert)
+        }
+    }
+    
+    private fun showPhoneAlarmDialog() {
+        // 如果已有弹窗，先关闭
+        alarmDialog?.dismiss()
+        
+        val deviceName = viewModel.device.value?.name ?: "iTAG"
+        
+        alarmDialog = MaterialAlertDialogBuilder(requireContext())
+            .setTitle("[$deviceName] 正在寻找您的手机")
+            .setMessage("按下防丢器按钮两次可以停止报警")
+            .setPositiveButton("好的") { _, _ ->
+                viewModel.stopPhoneAlarm()
+                dismissAlarmDialog()
+            }
+            .setCancelable(false)
+            .show()
+    }
+    
+    private fun dismissAlarmDialog() {
+        alarmDialog?.dismiss()
+        alarmDialog = null
     }
     
     private fun updateConnectionState(state: BleConnectionState) {
@@ -139,6 +200,8 @@ class HomeFragment : Fragment() {
     }
     
     override fun onDestroyView() {
+        dismissAlarmDialog()
+        viewModel.stopPhoneAlarm()
         super.onDestroyView()
         _binding = null
     }

@@ -19,11 +19,9 @@ import androidx.fragment.app.viewModels
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import androidx.navigation.fragment.findNavController
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.timepicker.MaterialTimePicker
 import com.google.android.material.timepicker.TimeFormat
-import com.monkeycode.blelostfinder.R
 import com.monkeycode.blelostfinder.databinding.FragmentSettingsBinding
 import com.monkeycode.blelostfinder.util.PermissionHelper
 import dagger.hilt.android.AndroidEntryPoint
@@ -172,19 +170,6 @@ class SettingsFragment : Fragment() {
         
         binding.btnAutoStart.setOnClickListener {
             PermissionHelper.openAppSettings(requireContext())
-        }
-        
-        binding.btnHome.setOnClickListener {
-            // 直接跳转到主页
-            try {
-                findNavController().popBackStack(
-                    R.id.navigation_home,
-                    inclusive = false
-                )
-            } catch (e: Exception) {
-                // 如果 Navigation 失败，才使用 finish
-                activity?.finish()
-            }
         }
         
         binding.btnRingtone.setOnClickListener {

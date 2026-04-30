@@ -187,16 +187,6 @@
             style="@style/Widget.Material3.Button.OutlinedButton"
             android:layout_marginBottom="16dp" />
 
-        <!-- 主页按钮 -->
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/btn_home"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="主页"
-            android:textSize="16sp"
-            style="@style/Widget.Material3.Button.OutlinedButton"
-            android:layout_marginBottom="16dp" />
-            
         <!-- Background Keepalive -->
         <TextView
             android:layout_width="wrap_content"

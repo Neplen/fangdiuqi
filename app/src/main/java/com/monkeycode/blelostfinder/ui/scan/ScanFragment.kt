@@ -129,19 +129,6 @@ class ScanFragment : Fragment() {
                 activity?.finish()
             }
         }
-        
-        binding.btnHome.setOnClickListener {
-            // 直接跳转到主页
-            try {
-                findNavController().popBackStack(
-                    R.id.navigation_home,
-                    inclusive = false
-                )
-            } catch (e: Exception) {
-                // 如果 Navigation 失败，才使用 finish
-                activity?.finish()
-            }
-        }
     }
 
     override fun onDestroyView() {

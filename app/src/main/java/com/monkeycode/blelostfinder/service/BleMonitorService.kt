@@ -316,17 +316,16 @@ class BleMonitorService : Service() {
     private fun stopMonitoring() {
         isMonitoring = false
         rssiMonitorJob?.cancel()
-        bleManager.disconnect()
         stopAlarmIfPlaying()
         Log.d(TAG, "Monitoring stopped")
     }
 
     private fun startRssiMonitoring() {
-        // 每 2 秒读取一次 RSSI
+        // 每 1 秒读取一次 RSSI
         rssiMonitorJob = serviceScope.launch {
             while (isMonitoring) {
                 try {
-                    kotlinx.coroutines.delay(2000)
+                    kotlinx.coroutines.delay(1000)
                     
                     val currentRssi = bleManager.rssi.value
                     Log.d(TAG, "当前 RSSI: $currentRssi dBm, 阈值：$currentRssiThreshold dBm")

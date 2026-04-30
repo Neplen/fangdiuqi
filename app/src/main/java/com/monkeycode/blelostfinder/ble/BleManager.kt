@@ -243,11 +243,11 @@ class BleManager @Inject constructor(
                 return@channelFlow
             }
             
-            // Start RSSI polling
+            // Start RSSI polling every 1 second
             launch {
                 try {
                     while (true) {
-                        kotlinx.coroutines.delay(2000)
+                        kotlinx.coroutines.delay(1000) // 改为 1 秒
                         // 检查蓝牙适配器状态
                         if (bluetoothAdapter == null || !bluetoothAdapter!!.isEnabled) {
                             Log.e(TAG, "蓝牙适配器不可用，停止 RSSI 轮询")
@@ -265,11 +265,9 @@ class BleManager @Inject constructor(
             }
             
             awaitClose {
-                try {
-                    disconnect()
-                } catch (e: Exception) {
-                    Log.e(TAG, "关闭连接时出错", e)
-                }
+                // 不再自动断开连接，保持长连接
+                // 只有用户手动调用 disconnect() 时才会断开
+                Log.d(TAG, "Flow 取消监听，但保持 GATT 连接")
             }
         } catch (e: Exception) {
             Log.e(TAG, "connect 方法异常", e)

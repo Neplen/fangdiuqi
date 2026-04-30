@@ -170,7 +170,23 @@ class MainActivity : AppCompatActivity() {
     
     private fun setupNavigation() {
         val navController = findNavController(R.id.nav_host_fragment)
-        binding.bottomNavigation.setupWithNavController(navController)
+        
+        // 不使用 setupWithNavController 的自动导航，改用手动设置点击事件
+        binding.bottomNavigation.setOnItemSelectedListener { item ->
+            when (item.itemId) {
+                R.id.navigation_home -> {
+                    // 强制跳转到主页，不管当前在哪个页面
+                    navController.navigate(R.id.navigation_home)
+                    true
+                }
+                R.id.navigation_settings -> {
+                    // 强制跳转到设置页，不管当前在哪个页面
+                    navController.navigate(R.id.navigation_settings)
+                    true
+                }
+                else -> false
+            }
+        }
     }
     
     private fun checkPermissions() {

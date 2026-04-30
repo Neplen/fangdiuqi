@@ -1,5 +1,8 @@
 package com.monkeycode.blelostfinder.ble
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.content.Context
@@ -20,6 +23,8 @@ class BleManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val deviceRepository: DeviceRepository
 ) {
+     // 自定义协程作用域，用于RSSI轮询
+    private val managerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     companion object {
         private const val TAG = "BleManager"
         
@@ -289,7 +294,7 @@ private fun startRssiPolling() {
     // 取消旧的轮询，防止重复
     rssiPollingJob?.cancel()
     
-    rssiPollingJob = viewModelScope.launch {
+    rssiPollingJob = managerScope.launch {
         while (true) {
             delay(1000)
             if (bluetoothAdapter?.isEnabled == true && bluetoothGatt != null) {

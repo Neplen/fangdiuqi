@@ -11,7 +11,7 @@ import com.monkeycode.blelostfinder.ble.BleManager
 import com.monkeycode.blelostfinder.data.local.SettingsManager
 import com.monkeycode.blelostfinder.data.model.BleDevice
 import com.monkeycode.blelostfinder.data.repository.DeviceRepository
-import com.monkeycode.blelostfinder.service.BleMonitorService
+import com.monkeycode.blelostfinder.service.BleMonitorService.Companion.isRunning
 import com.monkeycode.blelostfinder.ui.settings.AlarmSoundManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -45,6 +45,9 @@ class HomeViewModel @Inject constructor(
     
     // 手机报警状态
     private var isPhoneAlarmPlaying = false
+    
+    // 服务运行状态
+    val isMonitoringRunning = isRunning
     
     // 手机报警弹窗触发
     private val _phoneAlarmTriggered = MutableStateFlow(false)

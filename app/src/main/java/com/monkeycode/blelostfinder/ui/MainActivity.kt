@@ -245,11 +245,30 @@ class MainActivity : AppCompatActivity() {
             if (needRequest.isNotEmpty()) {
                 permissionLauncher.launch(needRequest)
             } else {
-                checkBluetoothAndStart()
+                // 所有权限已获得，检查电池优化
+                checkBatteryOptimization()
             }
         } catch (e: Exception) {
             Log.e(TAG, "权限检查失败", e)
             showSnackbar("权限检查失败：${e.message}")
+        }
+    }
+    
+    private fun checkBatteryOptimization() {
+        try {
+            val powerManager = getSystemService(POWER_SERVICE) as android.os.PowerManager
+            val isIgnoring = powerManager.isIgnoringBatteryOptimizations(packageName)
+            
+            if (!isIgnoring) {
+                Log.d(TAG, "App 未忽略电池优化，建议用户设置")
+                // 显示提示，建议用户关闭电池优化
+                showSnackbar("建议关闭电池优化以确保后台监控稳定运行")
+            }
+            
+            checkBluetoothAndStart()
+        } catch (e: Exception) {
+            Log.e(TAG, "电池优化检查失败", e)
+            checkBluetoothAndStart()
         }
     }
     

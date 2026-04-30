@@ -25,6 +25,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
@@ -42,6 +45,10 @@ class BleMonitorService : Service() {
         
         private const val DEFAULT_RSSI_THRESHOLD = -90
         private const val DEFAULT_ALARM_DELAY = 60
+        
+        // 服务状态暴露
+        private val _isRunning = MutableStateFlow(false)
+        val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
     }
 
     @Inject
@@ -69,8 +76,11 @@ class BleMonitorService : Service() {
     private var alarmTriggerTime: Long? = null
     private var isAlarmPlaying = false
     private var isWifiDndActive = false
+    private var currentRssiThreshold = DEFAULT_RSSI_THRESHOLD
+    private var currentAlarmDelay = DEFAULT_ALARM_DELAY
     
     private var wifiLock: WifiManager.WifiLock? = null
+    private var rssiMonitorJob: kotlinx.coroutines.Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -78,6 +88,7 @@ class BleMonitorService : Service() {
         notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         wifiManager = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
         createNotificationChannel()
+        _isRunning.value = true
         initialize()
     }
 
@@ -124,6 +135,7 @@ class BleMonitorService : Service() {
         stopMonitoring()
         releaseWakeLock()
         serviceScope.cancel()
+        _isRunning.value = false
         super.onDestroy()
     }
 
@@ -212,8 +224,12 @@ class BleMonitorService : Service() {
         try {
             serviceScope.launch {
                 try {
+                    // 加载设备配置
                     deviceRepository.getDeviceByMac(deviceMac)?.let { device ->
                         currentDevice = device
+                        currentRssiThreshold = device.rssiThreshold
+                        currentAlarmDelay = device.alarmDelaySeconds
+                        Log.d(TAG, "加载设备配置：RSSI 阈值=$currentRssiThreshold, 延迟=$currentAlarmDelay 秒")
                     } ?: run {
                         val defaultDevice = BleDevice(
                             macAddress = deviceMac,
@@ -223,20 +239,16 @@ class BleMonitorService : Service() {
                         )
                         deviceRepository.insertDevice(defaultDevice)
                         currentDevice = defaultDevice
+                        currentRssiThreshold = DEFAULT_RSSI_THRESHOLD
+                        currentAlarmDelay = DEFAULT_ALARM_DELAY
                     }
-    
-                    bleManager.connect(deviceMac).onEach { state ->
-                        try {
-                            handleConnectionState(state)
-                        } catch (e: Exception) {
-                            Log.e(TAG, "处理连接状态失败", e)
-                        }
-                    }.launchIn(this)
+                    Log.d(TAG, "设备配置已加载")
                 } catch (e: Exception) {
                     Log.e(TAG, "设备加载失败", e)
                 }
             }
             
+            // 监听设置变化（WiFi 勿扰模式）
             serviceScope.launch {
                 try {
                     settingsManager.isWifiDndEnabled.collect { enabled ->
@@ -245,6 +257,36 @@ class BleMonitorService : Service() {
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "WiFi DND 收集失败", e)
+                }
+            }
+            
+            // RSSI 和报警延迟监听（实时更新）
+            serviceScope.launch {
+                try {
+                    kotlinx.coroutines.coroutineScope {
+                        // RSSI 阈值变化
+                        launch {
+                            deviceRepository.getDeviceByMacFlow(deviceMac)
+                                .onEach { device ->
+                                    device?.let {
+                                        currentRssiThreshold = it.rssiThreshold
+                                        currentAlarmDelay = it.alarmDelaySeconds
+                                        Log.d(TAG, "设置更新：RSSI 阈值=$currentRssiThreshold, 延迟=$currentAlarmDelay 秒")
+                                    }
+                                }
+                                .launchIn(this)
+                        }
+                        
+                        // WiFi 勿扰开关
+                        launch {
+                            settingsManager.isWifiDndEnabled.collect { enabled ->
+                                isWifiDndActive = enabled && isWifiConnected()
+                                Log.d(TAG, "WiFi DND active: $isWifiDndActive")
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "设置监听失败", e)
                 }
             }
             
@@ -262,6 +304,9 @@ class BleMonitorService : Service() {
                 }
             }
             
+            // 启动 RSSI 监控
+            startRssiMonitoring()
+            
             Log.d(TAG, "Monitoring started")
         } catch (e: Exception) {
             Log.e(TAG, "startMonitoring 异常", e)
@@ -270,9 +315,52 @@ class BleMonitorService : Service() {
 
     private fun stopMonitoring() {
         isMonitoring = false
+        rssiMonitorJob?.cancel()
         bleManager.disconnect()
         stopAlarmIfPlaying()
         Log.d(TAG, "Monitoring stopped")
+    }
+
+    private fun startRssiMonitoring() {
+        // 每 2 秒读取一次 RSSI
+        rssiMonitorJob = serviceScope.launch {
+            while (isMonitoring) {
+                try {
+                    kotlinx.coroutines.delay(2000)
+                    
+                    val currentRssi = bleManager.rssi.value
+                    Log.d(TAG, "当前 RSSI: $currentRssi dBm, 阈值：$currentRssiThreshold dBm")
+                    
+                    if (currentRssi < currentRssiThreshold && currentRssi != -100) {
+                        // RSSI 低于阈值
+                        if (alarmTriggerTime == null) {
+                            alarmTriggerTime = System.currentTimeMillis()
+                            Log.d(TAG, "RSSI 低于阈值，开始计时：$currentRssi < $currentRssiThreshold")
+                        } else {
+                            val elapsedSeconds = (System.currentTimeMillis() - alarmTriggerTime!!) / 1000
+                            Log.d(TAG, "RSSI 持续低于阈值 ${elapsedSeconds}s/${currentAlarmDelay}s")
+                            
+                            if (elapsedSeconds >= currentAlarmDelay) {
+                                // 超过延迟时间，触发报警
+                                Log.d(TAG, "RSSI 低于阈值超过 ${currentAlarmDelay}秒，触发断连报警")
+                                triggerPhoneAlarm("断连报警 (RSSI=$currentRssi)")
+                            }
+                        }
+                    } else {
+                        // RSSI 恢复正常
+                        alarmTriggerTime = null
+                        // 如果正在报警，停止它
+                        if (isAlarmPlaying) {
+                            stopAlarmIfPlaying()
+                            Log.d(TAG, "RSSI 恢复正常，停止报警")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "RSSI 监控异常", e)
+                }
+            }
+        }
+        Log.d(TAG, "RSSI 监控已启动")
     }
 
     private fun handleConnectionState(state: BleConnectionState) {
@@ -301,6 +389,7 @@ class BleMonitorService : Service() {
                         ))
                     }
                     
+                    // 断连后立即重连
                     kotlinx.coroutines.delay(5000)
                     if (isMonitoring) {
                         bleManager.connect(deviceMac)

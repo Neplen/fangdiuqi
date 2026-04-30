@@ -93,7 +93,20 @@ class HomeFragment : Fragment() {
                         }
                     }
                 }
+                
+                launch {
+                    viewModel.isMonitoringRunning.collect { isRunning ->
+                        updateMonitorSwitch(isRunning)
+                    }
+                }
             }
+        }
+    }
+    
+    private fun updateMonitorSwitch(isRunning: Boolean) {
+        // 只有当开关当前状态与服务状态不一致时才更新，避免触发 onCheckedChanged
+        if (binding.switchMonitor.isChecked != isRunning) {
+            binding.switchMonitor.isChecked = isRunning
         }
     }
     

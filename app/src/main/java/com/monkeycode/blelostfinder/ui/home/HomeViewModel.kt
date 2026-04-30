@@ -17,6 +17,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -134,7 +135,7 @@ class HomeViewModel @Inject constructor(
                 // 先停止之前的铃声，防止叠加
                 alarmSoundManager.stopPlaying()
                 // 播放手机警报（循环播放）
-                val ringtonePath = settingsManager.alarmRingtonePath.value
+                val ringtonePath = settingsManager.alarmRingtonePath.first()
                 alarmSoundManager.playAlarm(ringtonePath)
                 // 触发弹窗
                 _phoneAlarmTriggered.value = true

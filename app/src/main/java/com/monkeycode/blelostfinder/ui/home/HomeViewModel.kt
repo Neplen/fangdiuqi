@@ -152,7 +152,7 @@ class HomeViewModel @Inject constructor(
     }
     
     fun stopPhoneAlarm() {
-        viewModelScope.launch {
+    // 同步立即停止，不使用协程，解决铃声无法停止的问题
             try {
                 alarmSoundManager.stopPlaying()
                 _phoneAlarmTriggered.value = false
@@ -161,7 +161,6 @@ class HomeViewModel @Inject constructor(
             } catch (e: Exception) {
                 Log.e("HomeViewModel", "停止手机响铃失败", e)
             }
-        }
     }
     
     fun clearPhoneAlertDialog() {

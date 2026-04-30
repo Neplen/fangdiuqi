@@ -11,6 +11,7 @@ import com.monkeycode.blelostfinder.ble.BleManager
 import com.monkeycode.blelostfinder.data.local.SettingsManager
 import com.monkeycode.blelostfinder.data.model.BleDevice
 import com.monkeycode.blelostfinder.data.repository.DeviceRepository
+import com.monkeycode.blelostfinder.service.BleMonitorService
 import com.monkeycode.blelostfinder.service.BleMonitorService.Companion.isRunning
 import com.monkeycode.blelostfinder.ui.settings.AlarmSoundManager
 import dagger.hilt.android.lifecycle.HiltViewModel

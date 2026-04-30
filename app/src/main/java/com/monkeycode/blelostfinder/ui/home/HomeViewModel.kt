@@ -134,7 +134,7 @@ class HomeViewModel @Inject constructor(
                 // 先停止之前的铃声，防止叠加
                 alarmSoundManager.stopPlaying()
                 // 播放手机警报（循环播放）
-                val ringtonePath = settingsManager.alarmRingtonePath.firstOrNull()
+                val ringtonePath = settingsManager.alarmRingtonePath.value
                 alarmSoundManager.playAlarm(ringtonePath)
                 // 触发弹窗
                 _phoneAlarmTriggered.value = true

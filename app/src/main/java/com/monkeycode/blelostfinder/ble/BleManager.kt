@@ -63,6 +63,8 @@ class BleManager @Inject constructor(
     val connectionState: StateFlow<BleConnectionState> = _connectionState.asStateFlow()
     
     private val _rssi = MutableStateFlow(-100)
+    // RSSI轮询任务
+    private var rssiPollingJob: kotlinx.coroutines.Job? = null
     val rssi: StateFlow<Int> = _rssi.asStateFlow()
     
     private val _batteryLevel = MutableStateFlow(-1)

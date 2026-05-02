@@ -22,7 +22,6 @@ import androidx.fragment.app.viewModels
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import com.monkeycode.blelostfinder.R
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
 
@@ -32,7 +31,6 @@ class SettingsFragment : Fragment() {
     private val viewModel: SettingsViewModel by viewModels()
     private var isDialogShowing = false
 
-    // 铃声选择的ActivityResult
     private val ringtoneLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
             val uri: Uri? = result.data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
@@ -48,7 +46,7 @@ class SettingsFragment : Fragment() {
         container: ViewGroup?,
         savedInstanceState: Bundle?
     ): View? {
-        // 这里直接返回null，不加载任何布局，避免控件引用错误
+        // 不加载任何布局，避免控件引用错误
         return null
     }
 
@@ -57,27 +55,21 @@ class SettingsFragment : Fragment() {
         observeViewModel()
     }
 
-    // 观察ViewModel状态（不依赖任何控件）
     private fun observeViewModel() {
         viewLifecycleOwner.lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                // 这里只是示例，不绑定任何UI，避免错误
+                // 只观察，不绑定UI，避免错误
                 launch {
-                    viewModel.rssiThreshold.collect {
-                        // 后续你可以在这里更新UI，现在先不写
-                    }
+                    viewModel.rssiThreshold.collect {}
                 }
                 launch {
-                    viewModel.alarmDelay.collect {
-                        // 后续你可以在这里更新UI，现在先不写
-                    }
+                    viewModel.alarmDelay.collect {}
                 }
             }
         }
     }
 
-    // ---------------- 核心功能：所有对话框和设置方法，和你的ViewModel兼容 ----------------
-    // 1. RSSI阈值对话框（可直接调用）
+    // 1. RSSI阈值对话框（无类型错误）
     fun showRssiThresholdDialog(currentValue: Int = -60) {
         if (isDialogShowing) return
         isDialogShowing = true
@@ -108,11 +100,10 @@ class SettingsFragment : Fragment() {
             val imm = requireContext().getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
             imm.showSoftInput(editText, InputMethodManager.SHOW_IMPLICIT)
         }
-
         dialog.show()
     }
 
-    // 2. 报警延迟对话框（可直接调用）
+    // 2. 报警延迟对话框（无类型错误）
     fun showAlarmDelayDialog(currentValue: Int = 5) {
         if (isDialogShowing) return
         isDialogShowing = true
@@ -143,16 +134,18 @@ class SettingsFragment : Fragment() {
             val imm = requireContext().getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
             imm.showSoftInput(editText, InputMethodManager.SHOW_IMPLICIT)
         }
-
         dialog.show()
     }
 
-    // 3. 时间选择器（可直接调用）
+    // 3. 时间选择器（直接解析，不依赖parseTime函数，避免类型错误）
     fun showTimePickerDialog(isStartTime: Boolean, currentTime: String = "00:00") {
         if (isDialogShowing) return
         isDialogShowing = true
 
-        val (hour, minute) = parseTime(currentTime)
+        // 直接解析时间，不使用函数，避免类型错误
+        val split = currentTime.split(":")
+        val hour = if (split.size >= 2) split[0].toIntOrNull() ?: 0 else 0
+        val minute = if (split.size >= 2) split[1].toIntOrNull() ?: 0 else 0
 
         val dialog = TimePickerDialog(requireContext(), { _, selectedHour, selectedMinute ->
             val formattedTime = String.format("%02d:%02d", selectedHour, selectedMinute)
@@ -170,7 +163,7 @@ class SettingsFragment : Fragment() {
         dialog.show()
     }
 
-    // 4. 打开铃声选择器（可直接调用）
+    // 4. 打开铃声选择器
     fun openRingtonePicker() {
         val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
             putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM)
@@ -181,7 +174,7 @@ class SettingsFragment : Fragment() {
         ringtoneLauncher.launch(intent)
     }
 
-    // 5. 跳转到电池优化设置页（可直接调用）
+    // 5. 跳转到电池优化设置页
     fun openBatteryOptimizationSettings() {
         val intent = Intent().apply {
             action = Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
@@ -194,7 +187,7 @@ class SettingsFragment : Fragment() {
         }
     }
 
-    // 6. 跳转到自启动设置页（可直接调用）
+    // 6. 跳转到自启动设置页
     fun openAutoStartSettings() {
         val intent = Intent()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -207,16 +200,6 @@ class SettingsFragment : Fragment() {
             startActivity(intent)
         } else {
             Toast.makeText(requireContext(), "无法打开自启动设置", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    // 解析时间字符串
-    private fun parseTime(time: String): Pair<Int, Int> {
-        val parts = time.split(":")
-        return if (parts.size == 2) {
-            parts[0].toIntOrNull() ?: 0 to parts[1].toIntOrNull() ?: 0
-        } else {
-            0 to 0
         }
     }
 }

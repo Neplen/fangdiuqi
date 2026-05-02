@@ -23,7 +23,7 @@ class BleManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val deviceRepository: DeviceRepository
 ) {
-     // 自定义协程作用域，用于RSSI轮询
+    // 自定义协程作用域，用于RSSI轮询
     private val managerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     companion object {
         private const val TAG = "BleManager"
@@ -252,6 +252,7 @@ class BleManager @Inject constructor(
             
             // 启动全局RSSI轮询（连接成功后永久执行）
             startRssiPolling()
+            
             awaitClose {
                 // 不再自动断开连接，保持长连接
                 // 只有用户手动调用 disconnect() 时才会断开
@@ -291,26 +292,26 @@ class BleManager @Inject constructor(
         }
     }
 
-// 独立的RSSI轮询方法，连接期间永久执行
-private fun startRssiPolling() {
-    // 取消旧的轮询，防止重复
-    rssiPollingJob?.cancel()
+    // 独立的RSSI轮询方法，连接期间永久执行
+    private fun startRssiPolling() {
+          // 取消旧的轮询，防止重复
+          rssiPollingJob?.cancel()
     
-    rssiPollingJob = managerScope.launch {
-        while (true) {
-            delay(1000)
-            if (bluetoothAdapter?.isEnabled == true && bluetoothGatt != null) {
-                bluetoothGatt?.readRemoteRssi()
-            }
-        }
+          rssiPollingJob = managerScope.launch {
+                while (true) {
+                       delay(1000)
+                       if (bluetoothAdapter?.isEnabled == true && bluetoothGatt != null) {
+                            bluetoothGatt?.readRemoteRssi()
+                       }
+                }
+          }
     }
-}
 
-// 停止RSSI轮询
-private fun stopRssiPolling() {
-    rssiPollingJob?.cancel()
-    rssiPollingJob = null
-}
+    // 停止RSSI轮询
+    private fun stopRssiPolling() {
+          rssiPollingJob?.cancel()
+          rssiPollingJob = null
+    }
 
     @SuppressLint("MissingPermission")
     fun startAlarm() {

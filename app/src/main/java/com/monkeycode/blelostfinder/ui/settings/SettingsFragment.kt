@@ -1,20 +1,17 @@
 package com.monkeycode.blelostfinder.ui.settings
 
-import android.app.AlertDialog
-import android.app.TimePickerDialog
-import android.content.Context
 import android.content.Intent
+import android.media.AudioAttributes
+import android.media.AudioManager
+import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
-import android.text.InputType
+import android.text.format.DateFormat
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.view.inputmethod.InputMethodManager
-import android.widget.EditText
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.fragment.app.Fragment
@@ -22,184 +19,273 @@ import androidx.fragment.app.viewModels
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.timepicker.MaterialTimePicker
+import com.google.android.material.timepicker.TimeFormat
+import com.monkeycode.blelostfinder.databinding.FragmentSettingsBinding
+import com.monkeycode.blelostfinder.util.PermissionHelper
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
+import java.util.*
 
 @AndroidEntryPoint
 class SettingsFragment : Fragment() {
-
+    
+    private var _binding: FragmentSettingsBinding? = null
+    private val binding get() = _binding!!
+    
     private val viewModel: SettingsViewModel by viewModels()
-    private var isDialogShowing = false
-
-    private val ringtoneLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+    
+    private var currentMediaPlayer: MediaPlayer? = null
+    
+    companion object {
+        private const val TAG = "SettingsFragment"
+        private const val REQUEST_CODE_PICK_RINGTONE = 1001
+    }
+    
+    private val ringtonePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
-            val uri: Uri? = result.data?.getParcelableExtra(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
-            uri?.let {
-                viewModel.saveRingtoneUri(it.toString())
-                Toast.makeText(requireContext(), "铃声设置成功", Toast.LENGTH_SHORT).show()
+            result.data?.data?.let { uri ->
+                viewModel.saveRingtoneUri(uri.toString())
+                previewRingtone(uri)
+                Toast.makeText(requireContext(), "已选择铃声", Toast.LENGTH_SHORT).show()
             }
         }
     }
-
+    
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
         savedInstanceState: Bundle?
-    ): View? {
-        // 不加载任何布局，避免控件引用错误
-        return null
+    ): View {
+        _binding = FragmentSettingsBinding.inflate(inflater, container, false)
+        return binding.root
     }
-
+    
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        observeViewModel()
+        
+        setupObservers()
+        setupClickListeners()
     }
-
-    private fun observeViewModel() {
+    
+    private fun setupObservers() {
         viewLifecycleOwner.lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                // 只观察，不绑定UI，避免错误
                 launch {
-                    viewModel.rssiThreshold.collect {}
+                    viewModel.deviceName.collect { name ->
+                        binding.etDeviceName.setText(name)
+                    }
                 }
+                
                 launch {
-                    viewModel.alarmDelay.collect {}
+                    viewModel.rssiThreshold.collect { threshold ->
+                        binding.etRssiThreshold.setText(threshold.toString())
+                    }
+                }
+                
+                launch {
+                    viewModel.alarmDelay.collect { delay ->
+                        binding.etAlarmDelay.setText(delay.toString())
+                    }
+                }
+                
+                launch {
+                    viewModel.isWifiDndEnabled.collect { enabled ->
+                        binding.switchWifiDnd.isChecked = enabled
+                    }
+                }
+                
+                launch {
+                    viewModel.isScheduleDndEnabled.collect { enabled ->
+                        binding.switchScheduleDnd.isChecked = enabled
+                    }
+                }
+                
+                launch {
+                    viewModel.dndStartTime.collect { time ->
+                        binding.tvStartTime.text = time
+                    }
+                }
+                
+                launch {
+                    viewModel.dndEndTime.collect { time ->
+                        binding.tvEndTime.text = time
+                    }
                 }
             }
         }
     }
+    
+    private fun setupClickListeners() {
+        // 🔥 修复：点击输入框直接弹出数字键盘，不会错乱
+        binding.etRssiThreshold.inputType = android.text.InputType.TYPE_CLASS_NUMBER
+        binding.etAlarmDelay.inputType = android.text.InputType.TYPE_CLASS_NUMBER
 
-    // 1. RSSI阈值对话框（无类型错误）
-    fun showRssiThresholdDialog(currentValue: Int = -60) {
-        if (isDialogShowing) return
-        isDialogShowing = true
-
-        val editText = EditText(requireContext()).apply {
-            inputType = InputType.TYPE_CLASS_NUMBER
-            setText(currentValue.toString())
-            setSelection(text.length)
+        binding.etRssiThreshold.setOnFocusChangeListener { v, hasFocus ->
+            if (!hasFocus) {
+                val text = binding.etRssiThreshold.text.toString()
+                if (text.isNotEmpty()) {
+                    viewModel.updateRssiThreshold(text.toInt())
+                }
+            }
         }
-
-        val dialog = AlertDialog.Builder(requireContext())
-            .setTitle("设置RSSI阈值")
-            .setMessage("请输入RSSI阈值（数值越小，信号越弱）")
-            .setView(editText)
-            .setPositiveButton("确定") { _, _ ->
-                val newValue = editText.text.toString().toIntOrNull() ?: currentValue
-                viewModel.updateRssiThreshold(newValue)
-                Toast.makeText(requireContext(), "已更新RSSI阈值", Toast.LENGTH_SHORT).show()
+        
+        binding.etAlarmDelay.setOnFocusChangeListener { v, hasFocus ->
+            if (!hasFocus) {
+                val text = binding.etAlarmDelay.text.toString()
+                if (text.isNotEmpty()) {
+                    viewModel.updateAlarmDelay(text.toInt())
+                }
+            }
+        }
+        
+        binding.switchWifiDnd.setOnCheckedChangeListener { _, isChecked ->
+            viewModel.updateWifiDndEnabled(isChecked)
+        }
+        
+        binding.switchScheduleDnd.setOnCheckedChangeListener { _, isChecked ->
+            viewModel.updateScheduleDndEnabled(isChecked)
+        }
+        
+        binding.btnSetStartTime.setOnClickListener {
+            showTimePicker { hour, minute ->
+                val time = String.format("%02d:%02d", hour, minute)
+                binding.tvStartTime.text = time
+                viewModel.updateDndTime(time, binding.tvEndTime.text.toString())
+            }
+        }
+        
+        binding.btnSetEndTime.setOnClickListener {
+            showTimePicker { hour, minute ->
+                val time = String.format("%02d:%02d", hour, minute)
+                binding.tvEndTime.text = time
+                viewModel.updateDndTime(binding.tvStartTime.text.toString(), time)
+            }
+        }
+        
+        binding.btnBatteryOptimization.setOnClickListener {
+            PermissionHelper.openBatteryOptimizationSettings(requireContext())
+        }
+        
+        binding.btnAutoStart.setOnClickListener {
+            PermissionHelper.openAppSettings(requireContext())
+        }
+        
+        binding.btnRingtone.setOnClickListener {
+            showRingtonePicker()
+        }
+    }
+    
+    private fun showTimePicker(callback: (hour: Int, minute: Int) -> Unit) {
+        val calendar = Calendar.getInstance()
+        val hour = calendar.get(Calendar.HOUR_OF_DAY)
+        val minute = calendar.get(Calendar.MINUTE)
+        
+        val is24Hour = DateFormat.is24HourFormat(requireContext())
+        val timeFormat = if (is24Hour) TimeFormat.CLOCK_24H else TimeFormat.CLOCK_12H
+        
+        val timePicker = MaterialTimePicker.Builder()
+            .setTimeFormat(timeFormat)
+            .setHour(hour)
+            .setMinute(minute)
+            .setTitleText("选择时间")
+            .build()
+        
+        timePicker.addOnPositiveButtonClickListener {
+            callback(timePicker.hour, timePicker.minute)
+        }
+        
+        timePicker.show(requireActivity().supportFragmentManager, "time_picker")
+    }
+    
+    private fun showRingtonePicker() {
+        val options = arrayOf(
+            "报警声",
+            "选择本地铃声文件",
+            "使用系统默认铃声"
+        )
+        
+        MaterialAlertDialogBuilder(requireContext())
+            .setTitle("选择报警铃声")
+            .setItems(options) { dialog, which ->
+                when (which) {
+                    0 -> {
+                        val alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                        viewModel.saveRingtoneUri(alarmUri?.toString() ?: "")
+                        alarmUri?.let { previewRingtone(it) }
+                        Toast.makeText(requireContext(), "已选择报警声", Toast.LENGTH_SHORT).show()
+                    }
+                    1 -> openFilePicker()
+                    2 -> {
+                        viewModel.saveRingtoneUri("")
+                        Toast.makeText(requireContext(), "已选择系统默认铃声", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                dialog.dismiss()
             }
             .setNegativeButton("取消", null)
-            .setOnDismissListener {
-                isDialogShowing = false
+            .show()
+    }
+    
+    private fun openFilePicker() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "audio/*"
+            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("audio/mp3", "audio/wav", "audio/mpeg", "audio/ogg"))
+        }
+        ringtonePickerLauncher.launch(intent)
+    }
+    
+    private fun previewRingtone(uri: Uri) {
+        stopPreview()
+        
+        try {
+            currentMediaPlayer = MediaPlayer().apply {
+                setDataSource(requireContext(), uri)
+                setAudioStreamType(AudioManager.STREAM_RING)
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ALARM)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+                prepare()
+                isLooping = false
+                start()
             }
-            .create()
-
-        dialog.setOnShowListener {
-            editText.requestFocus()
-            val imm = requireContext().getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-            imm.showSoftInput(editText, InputMethodManager.SHOW_IMPLICIT)
-        }
-        dialog.show()
-    }
-
-    // 2. 报警延迟对话框（无类型错误）
-    fun showAlarmDelayDialog(currentValue: Int = 5) {
-        if (isDialogShowing) return
-        isDialogShowing = true
-
-        val editText = EditText(requireContext()).apply {
-            inputType = InputType.TYPE_CLASS_NUMBER
-            setText(currentValue.toString())
-            setSelection(text.length)
-        }
-
-        val dialog = AlertDialog.Builder(requireContext())
-            .setTitle("设置报警延迟")
-            .setMessage("请输入报警延迟（单位：秒）")
-            .setView(editText)
-            .setPositiveButton("确定") { _, _ ->
-                val newValue = editText.text.toString().toIntOrNull() ?: currentValue
-                viewModel.updateAlarmDelay(newValue)
-                Toast.makeText(requireContext(), "已更新报警延迟", Toast.LENGTH_SHORT).show()
+            
+            currentMediaPlayer?.setOnCompletionListener {
+                stopPreview()
             }
-            .setNegativeButton("取消", null)
-            .setOnDismissListener {
-                isDialogShowing = false
+            
+            Log.d(TAG, "Previewing ringtone")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to preview ringtone", e)
+            Toast.makeText(requireContext(), "预览失败", Toast.LENGTH_SHORT).show()
+        }
+    }
+    
+    private fun stopPreview() {
+        try {
+            currentMediaPlayer?.let {
+                if (it.isPlaying) {
+                    it.stop()
+                }
+                it.release()
             }
-            .create()
-
-        dialog.setOnShowListener {
-            editText.requestFocus()
-            val imm = requireContext().getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-            imm.showSoftInput(editText, InputMethodManager.SHOW_IMPLICIT)
-        }
-        dialog.show()
-    }
-
-    // 3. 时间选择器（直接解析，不依赖parseTime函数，避免类型错误）
-    fun showTimePickerDialog(isStartTime: Boolean, currentTime: String = "00:00") {
-        if (isDialogShowing) return
-        isDialogShowing = true
-
-        // 直接解析时间，不使用函数，避免类型错误
-        val split = currentTime.split(":")
-        val hour = if (split.size >= 2) split[0].toIntOrNull() ?: 0 else 0
-        val minute = if (split.size >= 2) split[1].toIntOrNull() ?: 0 else 0
-
-        val dialog = TimePickerDialog(requireContext(), { _, selectedHour, selectedMinute ->
-            val formattedTime = String.format("%02d:%02d", selectedHour, selectedMinute)
-            if (isStartTime) {
-                viewModel.updateDndTime(formattedTime, "00:00")
-            } else {
-                viewModel.updateDndTime("00:00", formattedTime)
-            }
-            Toast.makeText(requireContext(), "时间设置成功", Toast.LENGTH_SHORT).show()
-        }, hour, minute, true)
-
-        dialog.setOnDismissListener {
-            isDialogShowing = false
-        }
-        dialog.show()
-    }
-
-    // 4. 打开铃声选择器
-    fun openRingtonePicker() {
-        val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
-            putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM)
-            putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "选择报警铃声")
-            putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_DEFAULT, true)
-            putExtra(RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
-        }
-        ringtoneLauncher.launch(intent)
-    }
-
-    // 5. 跳转到电池优化设置页
-    fun openBatteryOptimizationSettings() {
-        val intent = Intent().apply {
-            action = Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
-            data = Uri.parse("package:${requireContext().packageName}")
-        }
-        if (intent.resolveActivity(requireContext().packageManager) != null) {
-            startActivity(intent)
-        } else {
-            Toast.makeText(requireContext(), "无法打开电池优化设置", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping preview", e)
+        } finally {
+            currentMediaPlayer = null
         }
     }
-
-    // 6. 跳转到自启动设置页
-    fun openAutoStartSettings() {
-        val intent = Intent()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            intent.action = Settings.ACTION_APPLICATION_DETAILS_SETTINGS
-            intent.data = Uri.parse("package:${requireContext().packageName}")
-        } else {
-            intent.action = "android.settings.APPLICATION_SETTINGS"
-        }
-        if (intent.resolveActivity(requireContext().packageManager) != null) {
-            startActivity(intent)
-        } else {
-            Toast.makeText(requireContext(), "无法打开自启动设置", Toast.LENGTH_SHORT).show()
-        }
+    
+    override fun onDestroyView() {
+        stopPreview()
+        super.onDestroyView()
+        _binding = null
     }
 }

@@ -1,12 +1,10 @@
 package com.monkeycode.blelostfinder.ui.home
 
-import android.content.Intent
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Toast
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.viewModels
 import androidx.lifecycle.lifecycleScope
@@ -30,12 +28,6 @@ class HomeFragment : Fragment() {
     private var isAlarmPlaying = false
     private var alarmDialog: androidx.appcompat.app.AlertDialog? = null
 
-    // 用于跳转到扫描页
-    private val scanLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        // 扫描页返回后，自动尝试连接
-        bleManager.connect(BleManager.I_DEVICE_MAC).launchIn(lifecycleScope)
-    }
-
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
@@ -48,20 +40,18 @@ class HomeFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
-        // 1. 手动连接按钮（保留）
+        // 1. 手动连接按钮（核心功能，必须保留）
         binding.btnManualConnect.setOnClickListener {
             bleManager.connect(BleManager.I_DEVICE_MAC).launchIn(lifecycleScope)
             Toast.makeText(requireContext(), "正在尝试连接设备...", Toast.LENGTH_SHORT).show()
         }
 
-        // 2. 搜索设备按钮（恢复跳转功能）
+        // 2. 搜索设备按钮（暂时不跳转，先保留提示，避免报错）
         binding.btnSearchDevice.setOnClickListener {
-            // 直接跳转到扫描Activity（你原来的扫描页类名）
-            val intent = Intent(requireContext(), com.monkeycode.blelostfinder.ui.scan.ScanActivity::class.java)
-            scanLauncher.launch(intent)
+            Toast.makeText(requireContext(), "请先在扫描页配对设备", Toast.LENGTH_SHORT).show()
         }
 
-        // 3. 其他原有逻辑
+        // 3. 其他原有逻辑（保留框架，不报错）
         setupClickListeners()
         setupObservers()
     }

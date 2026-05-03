@@ -366,20 +366,19 @@ class BleManager @Inject constructor(
         }
     }
 
-    @SuppressLint("MissingPermission")
-    fun readBatteryLevel(): Int? {
-           return try {
-                  batteryCharacteristic?.let { characteristic ->
-                         bluetoothGatt?.readCharacteristic(characteristic)
-                         // 简单等待读取完成
-                         Thread.sleep(500)
-                         _batteryLevel.value
-                  }
-           } catch (e: Exception) {
-                 Log.e(TAG, "读取电池失败", e)
-                 null
-           }
-    }
+   @SuppressLint("MissingPermission")
+   fun readBatteryLevel(): Int? {
+          return try {
+                 batteryCharacteristic?.let { characteristic ->
+                        bluetoothGatt?.readCharacteristic(characteristic)
+                        Thread.sleep(500) // 简单等待读取完成
+                        _batteryLevel.value
+                 }
+          } catch (e: Exception) {
+                Log.e(TAG, "读取电池失败", e)
+                null
+          }
+   }
 
     fun isBluetoothEnabled(): Boolean {
         return bluetoothAdapter?.isEnabled == true

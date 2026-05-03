@@ -13,7 +13,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.util.*
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -30,8 +29,8 @@ class BleManager @Inject constructor(
         private var lastButtonPressTime = 0L
 
         // 自动重连配置
-        private const val RECONNECT_DELAY_MS = 3000L
-        private const val MAX_RECONNECT_ATTEMPTS = 10
+        private const val RECONNECT_DELAY = 3000L
+        private const val MAX_RECONNECT_TIMES = 10
 
         const val I_DEVICE_NAME = "iTAG"
         const val I_DEVICE_MAC = "FF:FF:11:8C:4E:3B"
@@ -55,7 +54,7 @@ class BleManager @Inject constructor(
     private var customCharacteristic: BluetoothGattCharacteristic? = null
 
     // 自动重连变量
-    private var reconnectAttempts = 0
+    private var reconnectCount = 0
     private var isAutoReconnectEnabled = true
     private var reconnectJob: kotlinx.coroutines.Job? = null
 
@@ -79,7 +78,7 @@ class BleManager @Inject constructor(
                 BluetoothProfile.STATE_CONNECTED -> {
                     _connectionState.value = BleConnectionState.Connected
                     bluetoothGatt = gatt
-                    reconnectAttempts = 0
+                    reconnectCount = 0
                     gatt.discoverServices()
                     startRssiPolling()
                 }
@@ -91,9 +90,9 @@ class BleManager @Inject constructor(
                     customCharacteristic = null
                     stopRssiPolling()
 
-                    // 自动重连触发
-                    if (isAutoReconnectEnabled && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-                        scheduleReconnect()
+                    // 断连后自动重连
+                    if (isAutoReconnectEnabled && reconnectCount < MAX_RECONNECT_TIMES) {
+                        startAutoReconnect()
                     }
                 }
             }
@@ -175,14 +174,24 @@ class BleManager @Inject constructor(
         }
     }
 
-    // 自动重连调度
-    private fun scheduleReconnect() {
+    // 自动重连方法
+    private fun startAutoReconnect() {
         reconnectJob?.cancel()
-        reconnectAttempts++
+        reconnectCount++
 
         reconnectJob = managerScope.launch {
-            delay(RECONNECT_DELAY_MS)
+            delay(RECONNECT_DELAY)
+            // 直接连接固定MAC地址
             connect(I_DEVICE_MAC)
+        }
+    }
+
+    // APP启动时主动连接的方法（关键！）
+    fun initConnectionOnAppStart() {
+        managerScope.launch {
+            if (initialize()) {
+                connect(I_DEVICE_MAC).collect {}
+            }
         }
     }
 

@@ -26,6 +26,10 @@ class HomeFragment : Fragment() {
     private val binding get() = _binding!!
     
     private val viewModel: HomeViewModel by viewModels()
+
+    // 👇 加上这行，注入 BleManager
+    @Inject
+    lateinit var bleManager: BleManager
     
     // 报警状态标记
     private var isAlarmPlaying = false
@@ -43,10 +47,26 @@ class HomeFragment : Fragment() {
     
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        
-        setupObservers()
-        setupClickListeners()
-    }
+        // 在 onViewCreated 中添加
+        binding.btnManualConnect.setOnClickListener {
+                binding.btnManualConnect.text = "连接中..."
+                bleManager.connect(BleManager.I_DEVICE_MAC).onEach { state ->
+                        when (state) {
+                                 is BleConnectionState.Connected -> {
+                                       binding.btnManualConnect.text = "已连接"
+                                 }
+                                 is BleConnectionState.Disconnected, is BleConnectionState.Error -> {
+                                       binding.btnManualConnect.text = "重新连接"
+                                 }
+                                 else -> {}
+                        }
+                }.launchIn(lifecycleScope)
+         }
+
+    // 👇 setupObservers 和 setupClickListeners 这些你原来的代码保持不变
+    setupObservers()
+    setupClickListeners()
+}
     
     private fun setupObservers() {
         viewLifecycleOwner.lifecycleScope.launch {

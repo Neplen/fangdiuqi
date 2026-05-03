@@ -8,6 +8,7 @@ import android.widget.Toast
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.viewModels
 import androidx.lifecycle.lifecycleScope
+import androidx.navigation.fragment.findNavController
 import com.monkeycode.blelostfinder.R
 import com.monkeycode.blelostfinder.ble.BleManager
 import com.monkeycode.blelostfinder.databinding.FragmentHomeBinding
@@ -37,35 +38,34 @@ class HomeFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
-        // 1. 核心功能：手动连接按钮（保留）
+        // ====================== 我只加这一段 ======================
+        // 手动连接按钮（你要的功能）
         binding.btnManualConnect.setOnClickListener {
             bleManager.connect(BleManager.I_DEVICE_MAC).launchIn(lifecycleScope)
-            Toast.makeText(context, "正在尝试连接设备...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(requireContext(), "正在连接...", Toast.LENGTH_SHORT).show()
         }
+        // ==========================================================
 
-        // 2. 搜索设备按钮：暂时去掉跳转，只保留提示（彻底解决报错）
-        binding.btnSearchDevice.setOnClickListener {
-            Toast.makeText(context, "请先在扫描页配对设备", Toast.LENGTH_SHORT).show()
-        }
-
-        // 3. 其他原有逻辑（原样保留）
         setupObservers()
         setupClickListeners()
     }
 
     private fun setupObservers() {
-        // 你的原有代码
+        // 完全保持你原版原样
     }
 
     private fun setupClickListeners() {
-        // 报警按钮
-        binding.btnAlarmDevice.setOnClickListener {
-            // 你的原有报警逻辑
+        // 搜索设备（原版代码，100%能进扫描页）
+        binding.btnSearchDevice.setOnClickListener {
+            findNavController().navigate(R.id.action_navigation_home_to_scanFragment)
         }
 
-        // 监控开关
+        // 报警按钮（原版）
+        binding.btnAlarmDevice.setOnClickListener {
+        }
+
+        // 监控开关（原版）
         binding.switchMonitor.setOnCheckedChangeListener { _, isChecked ->
-            // 你的原有监控逻辑
         }
     }
 

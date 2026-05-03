@@ -4,28 +4,34 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.Toast
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.viewModels
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.navigation.fragment.findNavController
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.snackbar.Snackbar
 import com.monkeycode.blelostfinder.R
-import com.monkeycode.blelostfinder.ble.BleManager
+import com.monkeycode.blelostfinder.ble.BleConnectionState
+import com.monkeycode.blelostfinder.data.model.BleDevice
 import com.monkeycode.blelostfinder.databinding.FragmentHomeBinding
 import dagger.hilt.android.AndroidEntryPoint
-import javax.inject.Inject
+import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
 class HomeFragment : Fragment() {
+    
     private var _binding: FragmentHomeBinding? = null
     private val binding get() = _binding!!
-
+    
     private val viewModel: HomeViewModel by viewModels()
-
-    @Inject
-    lateinit var bleManager: BleManager
-
+    
+    // 报警状态标记
     private var isAlarmPlaying = false
+    // 弹窗引用
     private var alarmDialog: androidx.appcompat.app.AlertDialog? = null
-
+    
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
@@ -34,45 +40,182 @@ class HomeFragment : Fragment() {
         _binding = FragmentHomeBinding.inflate(inflater, container, false)
         return binding.root
     }
-
+    
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-
-        // 1. 手动连接按钮（只加这一行，不碰其他任何代码）
-        binding.btnManualConnect.setOnClickListener {
-            // 这里直接调用连接，不使用协程，避免报错
-            bleManager.connect(BleManager.I_DEVICE_MAC)
-            Toast.makeText(requireContext(), "正在尝试连接设备...", Toast.LENGTH_SHORT).show()
-        }
-
-        // 2. 原版所有逻辑，完全保留不动
+        
         setupObservers()
         setupClickListeners()
     }
-
-    // 原版 setupObservers（空的，不添加任何代码，避免协程报错）
+    
     private fun setupObservers() {
+        viewLifecycleOwner.lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                launch {
+                    viewModel.connectionState.collect { state ->
+                        updateConnectionState(state)
+                    }
+                }
+                
+                launch {
+                    viewModel.device.collect { device ->
+                        device?.let { updateDeviceState(it) }
+                    }
+                }
+                
+                launch {
+                    viewModel.rssi.collect { rssi ->
+                        binding.tvRssi.text = "$rssi dBm"
+                        updateDistance(rssi)
+                    }
+                }
+                
+                launch {
+                    viewModel.batteryLevel.collect { level ->
+                        if (level >= 0) {
+                            binding.tvBattery.text = "$level%"
+                        } else {
+                            binding.tvBattery.text = "--%"
+                        }
+                    }
+                }
+                
+                launch {
+                    viewModel.isDeviceAlarmPlaying.collect { isPlaying ->
+                        updateAlarmButton(isPlaying)
+                    }
+                }
+                
+                launch {
+                    viewModel.phoneAlarmTriggered.collect { triggered ->
+                        if (triggered) {
+                            showPhoneAlarmDialog()
+                        }
+                    }
+                }
+                
+                launch {
+                    viewModel.isMonitoringRunning.collect { isRunning ->
+                        updateMonitorSwitch(isRunning)
+                    }
+                }
+            }
+        }
     }
-
-    // 原版 setupClickListeners（完全保留，包括扫描页跳转）
+    
+    private fun updateMonitorSwitch(isRunning: Boolean) {
+        // 只有当开关当前状态与服务状态不一致时才更新，避免触发 onCheckedChanged
+        if (binding.switchMonitor.isChecked != isRunning) {
+            binding.switchMonitor.isChecked = isRunning
+        }
+    }
+    
     private fun setupClickListeners() {
-        // 搜索设备按钮（原版跳转，原封不动）
         binding.btnSearchDevice.setOnClickListener {
-            findNavController().navigate(R.id.action_navigation_home_to_scanFragment)
+            findNavController().navigate(R.id.action_scan)
         }
-
-        // 报警按钮（原版逻辑）
+        
         binding.btnAlarmDevice.setOnClickListener {
-            // 你的原有报警逻辑
+            toggleDeviceAlarm()
         }
-
-        // 监控开关（原版逻辑）
+        
         binding.switchMonitor.setOnCheckedChangeListener { _, isChecked ->
-            // 你的原有监控逻辑
+            if (isChecked) {
+                viewModel.startMonitoring()
+            } else {
+                viewModel.stopMonitoring()
+            }
         }
     }
-
+    
+    private fun toggleDeviceAlarm() {
+        if (isAlarmPlaying) {
+            // 停止报警
+            viewModel.stopDeviceAlarm()
+            isAlarmPlaying = false
+            updateAlarmButton(false)
+            Snackbar.make(binding.root, "已停止报警", Snackbar.LENGTH_SHORT).show()
+        } else {
+            // 启动报警
+            viewModel.startDeviceAlarm()
+            isAlarmPlaying = true
+            updateAlarmButton(true)
+            Snackbar.make(binding.root, "正在让防丢器响铃...", Snackbar.LENGTH_SHORT).show()
+        }
+    }
+    
+    private fun updateAlarmButton(isPlaying: Boolean) {
+        if (isPlaying) {
+            binding.btnAlarmDevice.text = "停止报警"
+            binding.btnAlarmDevice.setIconResource(android.R.drawable.ic_media_pause)
+        } else {
+            binding.btnAlarmDevice.text = "点击报警"
+            binding.btnAlarmDevice.setIconResource(android.R.drawable.ic_dialog_alert)
+        }
+    }
+    
+    private fun showPhoneAlarmDialog() {
+        // 如果已有弹窗，先关闭
+        alarmDialog?.dismiss()
+        
+        val deviceName = viewModel.device.value?.name ?: "iTAG"
+        
+        alarmDialog = MaterialAlertDialogBuilder(requireContext())
+            .setTitle("[$deviceName] 正在寻找您的手机")
+            .setMessage("按下防丢器按钮两次可以停止报警")
+            .setPositiveButton("好的") { _, _ ->
+                // 强制停止所有铃声
+                viewModel.stopPhoneAlarm()
+                dismissAlarmDialog()
+            }
+            .setCancelable(false)
+            .show()
+    }
+    
+    private fun dismissAlarmDialog() {
+        alarmDialog?.dismiss()
+        alarmDialog = null
+    }
+    
+    private fun updateConnectionState(state: BleConnectionState) {
+        when (state) {
+            is BleConnectionState.Connected -> {
+                binding.tvConnectionStatus.text = "已连接"
+                binding.tvConnectionStatus.setTextColor(requireContext().getColor(R.color.connected))
+            }
+            is BleConnectionState.Disconnected -> {
+                binding.tvConnectionStatus.text = "已断开"
+                binding.tvConnectionStatus.setTextColor(requireContext().getColor(R.color.disconnected))
+            }
+            is BleConnectionState.Connecting -> {
+                binding.tvConnectionStatus.text = "连接中..."
+                binding.tvConnectionStatus.setTextColor(requireContext().getColor(R.color.warning))
+            }
+            is BleConnectionState.Error -> {
+                binding.tvConnectionStatus.text = "错误"
+                binding.tvConnectionStatus.setTextColor(requireContext().getColor(R.color.disconnected))
+            }
+            else -> {}
+        }
+    }
+    
+    private fun updateDeviceState(device: BleDevice) {
+        binding.tvDeviceName.text = device.name
+    }
+    
+    private fun updateDistance(rssi: Int) {
+        val distance = when {
+            rssi > -70 -> "1 米内"
+            rssi > -80 -> "1-3 米"
+            rssi > -90 -> "3-10 米"
+            else -> "> 10 米"
+        }
+        binding.tvDistance.text = distance
+    }
+    
     override fun onDestroyView() {
+        dismissAlarmDialog()
+        viewModel.stopPhoneAlarm()
         super.onDestroyView()
         _binding = null
     }

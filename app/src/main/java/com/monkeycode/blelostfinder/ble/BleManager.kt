@@ -367,29 +367,18 @@ class BleManager @Inject constructor(
     }
 
     @SuppressLint("MissingPermission")
-    suspend fun readBatteryLevel(): Int? {
-        return try {
-            withContext(Dispatchers.IO) {
-                try {
-                    batteryCharacteristic?.let { characteristic ->
-                        try {
-                            bluetoothGatt?.readCharacteristic(characteristic)
-                            kotlinx.coroutines.delay(500)
-                            _batteryLevel.value
-                        } catch (e: Exception) {
-                            Log.e(TAG, "读取电池失败", e)
-                            null
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "readBatteryLevel 异常", e)
-                    null
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "readBatteryLevel 外部异常", e)
-            null
-        }
+    fun readBatteryLevel(): Int? {
+           return try {
+                  batteryCharacteristic?.let { characteristic ->
+                         bluetoothGatt?.readCharacteristic(characteristic)
+                         // 简单等待读取完成
+                         Thread.sleep(500)
+                         _batteryLevel.value
+                  }
+           } catch (e: Exception) {
+                 Log.e(TAG, "读取电池失败", e)
+                 null
+           }
     }
 
     fun isBluetoothEnabled(): Boolean {

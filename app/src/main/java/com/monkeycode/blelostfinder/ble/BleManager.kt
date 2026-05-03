@@ -28,7 +28,6 @@ class BleManager @Inject constructor(
         private const val DOUBLE_PRESS_TIMEOUT = 2000L
         private var lastButtonPressTime = 0L
 
-        // 自动重连配置
         private const val RECONNECT_DELAY = 3000L
         private const val MAX_RECONNECT_TIMES = 10
 
@@ -53,7 +52,6 @@ class BleManager @Inject constructor(
     private var batteryCharacteristic: BluetoothGattCharacteristic? = null
     private var customCharacteristic: BluetoothGattCharacteristic? = null
 
-    // 自动重连变量
     private var reconnectCount = 0
     private var isAutoReconnectEnabled = true
     private var reconnectJob: kotlinx.coroutines.Job? = null
@@ -90,7 +88,6 @@ class BleManager @Inject constructor(
                     customCharacteristic = null
                     stopRssiPolling()
 
-                    // 断连后自动重连
                     if (isAutoReconnectEnabled && reconnectCount < MAX_RECONNECT_TIMES) {
                         startAutoReconnect()
                     }
@@ -174,19 +171,16 @@ class BleManager @Inject constructor(
         }
     }
 
-    // 自动重连方法
     private fun startAutoReconnect() {
         reconnectJob?.cancel()
         reconnectCount++
 
         reconnectJob = managerScope.launch {
             delay(RECONNECT_DELAY)
-            // 直接连接固定MAC地址
-            connect(I_DEVICE_MAC)
+            connect(I_DEVICE_MAC).collect {}
         }
     }
 
-    // APP启动时主动连接的方法（关键！）
     fun initConnectionOnAppStart() {
         managerScope.launch {
             if (initialize()) {
@@ -366,19 +360,19 @@ class BleManager @Inject constructor(
         }
     }
 
-   @SuppressLint("MissingPermission")
-   fun readBatteryLevel(): Int? {
-          return try {
-                 batteryCharacteristic?.let { characteristic ->
-                        bluetoothGatt?.readCharacteristic(characteristic)
-                        Thread.sleep(500) // 简单等待读取完成
-                        _batteryLevel.value
-                 }
-          } catch (e: Exception) {
-                Log.e(TAG, "读取电池失败", e)
-                null
-          }
-   }
+    @SuppressLint("MissingPermission")
+    fun readBatteryLevel(): Int? {
+        return try {
+            batteryCharacteristic?.let { characteristic ->
+                bluetoothGatt?.readCharacteristic(characteristic)
+                Thread.sleep(500)
+                _batteryLevel.value
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "读取电池失败", e)
+            null
+        }
+    }
 
     fun isBluetoothEnabled(): Boolean {
         return bluetoothAdapter?.isEnabled == true

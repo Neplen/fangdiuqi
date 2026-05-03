@@ -20,9 +20,7 @@ class BleLostFinderApplication : Application() {
         super.onCreate()
         
         try {
-            // 初始化录音目录
             alarmSoundManager.initializeRecordingDir()
-            // APP启动时主动连接设备（关键！）
             bleManager.initConnectionOnAppStart()
             Log.d(TAG, "APP 初始化完成")
         } catch (e: Exception) {

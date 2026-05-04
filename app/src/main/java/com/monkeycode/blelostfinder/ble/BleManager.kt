@@ -1,8 +1,5 @@
 package com.monkeycode.blelostfinder.ble
 
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.content.Context
@@ -23,8 +20,6 @@ class BleManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val deviceRepository: DeviceRepository
 ) {
-    // 自定义协程作用域，用于RSSI轮询
-    private val managerScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     companion object {
         private const val TAG = "BleManager"
         
@@ -63,8 +58,6 @@ class BleManager @Inject constructor(
     val connectionState: StateFlow<BleConnectionState> = _connectionState.asStateFlow()
     
     private val _rssi = MutableStateFlow(-100)
-    // RSSI轮询任务
-    private var rssiPollingJob: kotlinx.coroutines.Job? = null
     val rssi: StateFlow<Int> = _rssi.asStateFlow()
     
     private val _batteryLevel = MutableStateFlow(-1)
@@ -250,8 +243,26 @@ class BleManager @Inject constructor(
                 return@channelFlow
             }
             
-            // 启动全局RSSI轮询（连接成功后永久执行）
-            startRssiPolling()
+            // Start RSSI polling every 1 second
+            launch {
+                try {
+                    while (true) {
+                        kotlinx.coroutines.delay(1000) // 改为 1 秒
+                        // 检查蓝牙适配器状态
+                        if (bluetoothAdapter == null || !bluetoothAdapter!!.isEnabled) {
+                            Log.e(TAG, "蓝牙适配器不可用，停止 RSSI 轮询")
+                            break
+                        }
+                        if (bluetoothGatt != null) {
+                            bluetoothGatt?.readRemoteRssi()
+                        } else {
+                            Log.d(TAG, "GATT 未连接，等待重连")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "RSSI 轮询失败", e)
+                }
+            }
             
             awaitClose {
                 // 不再自动断开连接，保持长连接
@@ -286,31 +297,9 @@ class BleManager @Inject constructor(
                 
                 bluetoothGatt = null
             }
-            stopRssiPolling() // 断开连接时停止RSSI轮询
         } catch (e: Exception) {
             Log.e(TAG, "disconnect 方法异常", e)
         }
-    }
-
-    // 独立的RSSI轮询方法，连接期间永久执行
-    private fun startRssiPolling() {
-          // 取消旧的轮询，防止重复
-          rssiPollingJob?.cancel()
-    
-          rssiPollingJob = managerScope.launch {
-                while (true) {
-                       delay(1000)
-                       if (bluetoothAdapter?.isEnabled == true && bluetoothGatt != null) {
-                            bluetoothGatt?.readRemoteRssi()
-                       }
-                }
-          }
-    }
-
-    // 停止RSSI轮询
-    private fun stopRssiPolling() {
-          rssiPollingJob?.cancel()
-          rssiPollingJob = null
     }
 
     @SuppressLint("MissingPermission")

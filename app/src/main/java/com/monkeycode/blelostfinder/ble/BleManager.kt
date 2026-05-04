@@ -47,6 +47,7 @@ class BleManager @Inject constructor(
         const val ALERT_STOP_COMMAND = 0x00.toByte()
     }
 
+    // 显式声明所有变量类型，避免递归推断问题
     private var bluetoothAdapter: BluetoothAdapter? = null
     private var bluetoothDevice: BluetoothDevice? = null
     private var bluetoothGatt: BluetoothGatt? = null
@@ -57,16 +58,17 @@ class BleManager @Inject constructor(
     // 保存要连接的设备地址，用于断连后重连
     private var deviceMacToConnect: String? = null
     
-    private val _connectionState = MutableStateFlow<BleConnectionState>(BleConnectionState.Disconnected)
+    // 显式声明 Flow 类型
+    private val _connectionState: MutableStateFlow<BleConnectionState> = MutableStateFlow<BleConnectionState>(BleConnectionState.Disconnected)
     val connectionState: StateFlow<BleConnectionState> = _connectionState.asStateFlow()
     
-    private val _rssi = MutableStateFlow(-100)
+    private val _rssi: MutableStateFlow<Int> = MutableStateFlow<Int>(-100)
     val rssi: StateFlow<Int> = _rssi.asStateFlow()
     
-    private val _batteryLevel = MutableStateFlow(-1)
+    private val _batteryLevel: MutableStateFlow<Int> = MutableStateFlow<Int>(-1)
     val batteryLevel: StateFlow<Int> = _batteryLevel.asStateFlow()
     
-    private val _bleEvents = MutableSharedFlow<BleEvent>()
+    private val _bleEvents: MutableSharedFlow<BleEvent> = MutableSharedFlow<BleEvent>()
     val bleEvents: SharedFlow<BleEvent> = _bleEvents.asSharedFlow()
 
     private val bleCallback = object : BluetoothGattCallback() {

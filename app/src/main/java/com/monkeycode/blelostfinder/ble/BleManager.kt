@@ -87,26 +87,31 @@ class BleManager @Inject constructor(
                     customCharacteristic = null
                     
                     // 自动重连逻辑：3 秒后尝试重连
-                    deviceMacToConnect?.let { mac ->
-                        kotlinx.coroutines.GlobalScope.launch {
-                            try {
-                                kotlinx.coroutines.delay(3000)
-                                Log.d(TAG, "开始自动重连设备：$mac")
-                                
-                                val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) 
-                                    as? BluetoothManager)?.adapter
-                                
-                                if (currentAdapter != null && currentAdapter.isEnabled) {
-                                    bluetoothAdapter = currentAdapter
-                                    val device = currentAdapter.getRemoteDevice(mac)
-                                    device.connectGatt(context, false, bleCallback)
-                                    Log.d(TAG, "自动重连 GATT 已发起")
-                                } else {
-                                    Log.e(TAG, "蓝牙未开启，等待开启后重连")
+                    val macToReconnect = deviceMacToConnect
+                    if (macToReconnect != null) {
+                        try {
+                            Thread {
+                                try {
+                                    Thread.sleep(3000)
+                                    Log.d(TAG, "开始自动重连设备：$macToReconnect")
+                                    
+                                    val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) 
+                                        as? BluetoothManager)?.adapter
+                                    
+                                    if (currentAdapter != null && currentAdapter.isEnabled) {
+                                        bluetoothAdapter = currentAdapter
+                                        val device = currentAdapter.getRemoteDevice(macToReconnect)
+                                        device.connectGatt(context, false, bleCallback)
+                                        Log.d(TAG, "自动重连 GATT 已发起")
+                                    } else {
+                                        Log.e(TAG, "蓝牙未开启，等待开启后重连")
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "自动重连失败", e)
                                 }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "自动重连失败", e)
-                            }
+                            }.start()
+                        } catch (e: Exception) {
+                            Log.e(TAG, "自动重连线程启动失败", e)
                         }
                     }
                 }
@@ -170,8 +175,13 @@ class BleManager @Inject constructor(
                 if (currentTime - lastPressTime < DOUBLE_PRESS_TIMEOUT) {
                     // 检测为双击
                     lastButtonPressTime = 0
-                    kotlinx.coroutines.GlobalScope.launch {
-                        _bleEvents.emit(BleEvent.DoubleButtonPressed)
+                    // 使用 Runnable 而不是协程，避免类型推断问题
+                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                        try {
+                            _bleEvents.tryEmit(BleEvent.DoubleButtonPressed)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "发送双击事件失败", e)
+                        }
                     }
                     Log.d(TAG, "检测到双击事件")
                 } else {
@@ -274,7 +284,7 @@ class BleManager @Inject constructor(
             }
             
             // Start RSSI polling every 1 second
-            launch {
+            val rssiPollJob = launch {
                 try {
                     while (true) {
                         kotlinx.coroutines.delay(1000) // 1 秒轮询一次
@@ -295,7 +305,8 @@ class BleManager @Inject constructor(
             }
             
             awaitClose {
-                Log.d(TAG, "Flow 取消监听")
+                rssiPollJob.cancel()
+                Log.d(TAG, "Flow 取消监听，已停止 RSSI 轮询")
             }
         } catch (e: Exception) {
             Log.e(TAG, "connect 方法异常", e)

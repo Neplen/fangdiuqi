@@ -87,6 +87,14 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             bleManager.connectionState.collect { state: BleConnectionState ->
                 _connectionState.value = state
+                // 连接成功时重置报警状态
+                if (state is BleConnectionState.Connected) {
+                    Log.d("HomeViewModel", "设备已连接，重置报警状态")
+                    _isDeviceAlarmPlaying.value = false
+                    if (isPhoneAlarmPlaying) {
+                        stopPhoneAlarm()
+                    }
+                }
             }
         }
     }
@@ -96,11 +104,9 @@ class HomeViewModel @Inject constructor(
             bleManager.bleEvents.collect { event ->
                 when (event) {
                     is BleEvent.ButtonPressed -> {
-                        // 单击不触发任何报警
                         Log.d("HomeViewModel", "检测到防丢器单击，忽略")
                     }
                     is BleEvent.DoubleButtonPressed -> {
-                        // 双击处理：如果正在报警则停止，否则触发报警
                         if (isPhoneAlarmPlaying) {
                             Log.d("HomeViewModel", "检测到防丢器双击，正在报警中，停止报警")
                             stopPhoneAlarm()
@@ -108,6 +114,10 @@ class HomeViewModel @Inject constructor(
                             Log.d("HomeViewModel", "检测到防丢器双击，触发手机报警")
                             triggerPhoneAlarm()
                         }
+                    }
+                    is BleEvent.Disconnected -> {
+                        Log.d("HomeViewModel", "检测到断连事件，触发手机和防丢器同时报警")
+                        triggerBothAlarms()
                     }
                     else -> {}
                 }
@@ -145,6 +155,21 @@ class HomeViewModel @Inject constructor(
             stopDeviceAlarm()
         } else {
             startDeviceAlarm()
+        }
+    }
+    
+    fun triggerBothAlarms() {
+        viewModelScope.launch {
+            try {
+                Log.d("HomeViewModel", "触发双向报警：手机 + 防丢器（防丢器固件会自动报警，APP 触发手机报警）")
+                // 注意：断连后无法通过 BLE 命令控制防丢器，防丢器固件会在断连时自动报警
+                // 这里只需要触发手机报警即可
+                triggerPhoneAlarm()
+                // 更新 UI 状态，显示按钮为"已报警"
+                _isDeviceAlarmPlaying.value = true
+            } catch (e: Exception) {
+                Log.e("HomeViewModel", "触发双向报警失败", e)
+            }
         }
     }
     

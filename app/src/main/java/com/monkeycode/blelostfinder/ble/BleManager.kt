@@ -91,6 +91,17 @@ class BleManager @Inject constructor(
                     batteryCharacteristic = null
                     customCharacteristic = null
                     
+                    // 断连时立即触发防丢器报警（通过 BLE 命令）
+                    // 注意：此时 GATT 已断开，无法发送 BLE 命令，需要在 HomeViewModel 中处理
+                    // 这里只发送断连事件，让上层处理报警逻辑
+                    mainHandler.post {
+                        try {
+                            _bleEvents.tryEmit(BleEvent.Disconnected)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "发送断连事件失败", e)
+                        }
+                    }
+                    
                     // 自动重连逻辑：3 秒后尝试重连
                     deviceMacToConnect?.let { mac ->
                         // 使用 Handler 延迟重连，避免在匿名对象中使用协程导致递归类型检查问题

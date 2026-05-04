@@ -369,6 +369,12 @@ class BleMonitorService : Service() {
                     Log.d(TAG, "Connected to device")
                     alarmTriggerTime = null
                     
+                    // 连接成功时停止报警
+                    if (isAlarmPlaying) {
+                        stopAlarmIfPlaying()
+                        Log.d(TAG, "设备已重连，停止报警")
+                    }
+                    
                     currentDevice?.let { device ->
                         deviceRepository.updateDevice(device.copy(
                             lastConnectedTime = System.currentTimeMillis(),
@@ -388,7 +394,10 @@ class BleMonitorService : Service() {
                         ))
                     }
                     
-                    // 断连后立即重连
+                    // 断连时立即触发报警（不需要等待 RSSI 超时）
+                    triggerPhoneAlarm("断连报警")
+                    
+                    // 5 秒后尝试重连
                     kotlinx.coroutines.delay(5000)
                     if (isMonitoring) {
                         bleManager.connect(deviceMac)

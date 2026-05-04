@@ -3,11 +3,12 @@ package com.monkeycode.blelostfinder.ble
 import android.annotation.SuppressLint
 import android.bluetooth.*
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.monkeycode.blelostfinder.data.repository.DeviceRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -69,6 +70,9 @@ class BleManager @Inject constructor(
     
     private val _bleEvents = MutableSharedFlow<BleEvent>()
     val bleEvents: SharedFlow<BleEvent> = _bleEvents.asSharedFlow()
+    
+    // Handler 用于延迟重连（ avoid recursive type checking issue with coroutines in anonymous objects）
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private val bleCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
@@ -89,26 +93,15 @@ class BleManager @Inject constructor(
                     
                     // 自动重连逻辑：3 秒后尝试重连
                     deviceMacToConnect?.let { mac ->
-                        kotlinx.coroutines.GlobalScope.launch {
+                        // 使用 Handler 延迟重连，避免在匿名对象中使用协程导致递归类型检查问题
+                        mainHandler.postDelayed({
                             try {
-                                kotlinx.coroutines.delay(3000)
                                 Log.d(TAG, "开始自动重连设备：$mac")
-                                
-                                val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) 
-                                    as? BluetoothManager)?.adapter
-                                
-                                if (currentAdapter != null && currentAdapter.isEnabled) {
-                                    bluetoothAdapter = currentAdapter
-                                    val device = currentAdapter.getRemoteDevice(mac)
-                                    device.connectGatt(context, false, bleCallback)
-                                    Log.d(TAG, "自动重连 GATT 已发起")
-                                } else {
-                                    Log.e(TAG, "蓝牙未开启，等待开启后重连")
-                                }
+                                scheduleReconnect(mac)
                             } catch (e: Exception) {
                                 Log.e(TAG, "自动重连失败", e)
                             }
-                        }
+                        }, 3000)
                     }
                 }
             }
@@ -171,8 +164,13 @@ class BleManager @Inject constructor(
                 if (currentTime - lastPressTime < DOUBLE_PRESS_TIMEOUT) {
                     // 检测为双击
                     lastButtonPressTime = 0
-                    kotlinx.coroutines.GlobalScope.launch {
-                        _bleEvents.emit(BleEvent.DoubleButtonPressed)
+                    // 使用 Handler 发送事件，避免在匿名对象中使用协程
+                    mainHandler.post {
+                        try {
+                            _bleEvents.tryEmit(BleEvent.DoubleButtonPressed)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "发送双击事件失败", e)
+                        }
                     }
                     Log.d(TAG, "检测到双击事件")
                 } else {
@@ -397,6 +395,27 @@ class BleManager @Inject constructor(
 
     fun isBluetoothEnabled(): Boolean {
         return bluetoothAdapter?.isEnabled == true
+    }
+    
+    /**
+     * 执行重连逻辑（在回调外部调用，避免递归类型检查问题）
+     */
+    private fun scheduleReconnect(mac: String) {
+        val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) 
+            as? BluetoothManager)?.adapter
+        
+        if (currentAdapter != null && currentAdapter.isEnabled) {
+            try {
+                bluetoothAdapter = currentAdapter
+                val device = currentAdapter.getRemoteDevice(mac)
+                device.connectGatt(context, false, bleCallback)
+                Log.d(TAG, "自动重连 GATT 已发起")
+            } catch (e: Exception) {
+                Log.e(TAG, "自动重连失败", e)
+            }
+        } else {
+            Log.e(TAG, "蓝牙未开启，等待开启后重连")
+        }
     }
     
     /**

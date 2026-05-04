@@ -21,15 +21,20 @@ import androidx.navigation.ui.setupWithNavController
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.android.material.snackbar.Snackbar
 import com.monkeycode.blelostfinder.R
+import com.monkeycode.blelostfinder.ble.BleManager
 import com.monkeycode.blelostfinder.databinding.ActivityMainBinding
 import com.monkeycode.blelostfinder.service.BleMonitorService
 import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class MainActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "BLELostFinder"
     }
+    
+    @Inject
+    lateinit var bleManager: BleManager
     
     private lateinit var binding: ActivityMainBinding
     
@@ -74,11 +79,13 @@ class MainActivity : AppCompatActivity() {
                     val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
                     when (state) {
                         BluetoothAdapter.STATE_ON -> {
-                            Log.d(TAG, "蓝牙已开启，启动服务")
+                            Log.d(TAG, "蓝牙已开启，启动服务并尝试重连")
                             // 延迟启动，确保适配器完全初始化
                             binding.root.postDelayed({
                                 try {
                                     startMonitorService()
+                                    // 蓝牙开启后尝试重连设备
+                                    bleManager.reconnectIfDisconnected()
                                 } catch (e: Exception) {
                                     Log.e(TAG, "蓝牙开启后启动服务失败", e)
                                 }

@@ -7,6 +7,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.monkeycode.blelostfinder.data.local.SettingsManager
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import java.io.File
@@ -18,13 +21,28 @@ class SettingsViewModel @Inject constructor(
     private val settingsManager: SettingsManager
 ) : AndroidViewModel(application) {
     
+    // 使用 MutableStateFlow 缓存当前值，支持 .value 访问
+    private val _rssiThreshold = MutableStateFlow(-90)
+    val rssiThreshold: StateFlow<Int> = _rssiThreshold.asStateFlow()
+    
+    private val _alarmDelay = MutableStateFlow(60)
+    val alarmDelay: StateFlow<Int> = _alarmDelay.asStateFlow()
+    
     val deviceName: Flow<String> = settingsManager.deviceName
-    val rssiThreshold: Flow<Int> = settingsManager.rssiThreshold
-    val alarmDelay: Flow<Int> = settingsManager.alarmDelay
     val isWifiDndEnabled: Flow<Boolean> = settingsManager.isWifiDndEnabled
     val isScheduleDndEnabled: Flow<Boolean> = settingsManager.isScheduleDndEnabled
     val dndStartTime: Flow<String> = settingsManager.dndStartTime
     val dndEndTime: Flow<String> = settingsManager.dndEndTime
+    
+    init {
+        // 从 DataStore 加载初始值
+        viewModelScope.launch {
+            settingsManager.rssiThreshold.collect { _rssiThreshold.value = it }
+        }
+        viewModelScope.launch {
+            settingsManager.alarmDelay.collect { _alarmDelay.value = it }
+        }
+    }
     
     fun updateRssiThreshold(threshold: Int) {
         viewModelScope.launch {

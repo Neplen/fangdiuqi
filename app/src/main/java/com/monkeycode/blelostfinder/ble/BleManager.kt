@@ -192,82 +192,110 @@ class BleManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     fun connect(macAddress: String): Flow<BleConnectionState> = channelFlow {
+        var isReconnecting = false
+        
         try {
-            // 关键修复：每次连接前都重新获取蓝牙适配器
-            // 这样即使用户在 APP 启动后手动开启蓝牙，也能正确获取到适配器
-            val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
-            
-            if (currentAdapter == null) {
-                Log.e(TAG, "设备不支持蓝牙")
-                send(BleConnectionState.Error("设备不支持蓝牙"))
-                close()
-                return@channelFlow
-            }
-            
-            if (!currentAdapter.isEnabled) {
-                Log.e(TAG, "蓝牙未开启")
-                send(BleConnectionState.Error("请先开启蓝牙"))
-                close()
-                return@channelFlow
-            }
-            
-            // 更新本地的适配器引用
-            bluetoothAdapter = currentAdapter
-
-            _connectionState.value = BleConnectionState.Connecting
-            send(BleConnectionState.Connecting)
-            
-            Log.d(TAG, "开始连接设备：$macAddress")
-
-            bluetoothDevice = try {
-                currentAdapter.getRemoteDevice(macAddress)
-            } catch (e: IllegalArgumentException) {
-                Log.e(TAG, "无效的 MAC 地址：$macAddress", e)
-                send(BleConnectionState.Error("无效的设备地址"))
-                close()
-                return@channelFlow
-            } catch (e: SecurityException) {
-                Log.e(TAG, "缺少蓝牙连接权限", e)
-                send(BleConnectionState.Error("缺少蓝牙连接权限"))
-                close()
-                return@channelFlow
-            }
-
-            try {
-                bluetoothDevice?.connectGatt(context, false, bleCallback)
-                Log.d(TAG, "GATT 连接已发起")
-            } catch (e: Exception) {
-                Log.e(TAG, "连接 GATT 失败", e)
-                send(BleConnectionState.Error("连接失败：${e.message}"))
-                close()
-                return@channelFlow
-            }
-            
-            // Start RSSI polling every 1 second
-            launch {
+            // 持续循环实现自动重连
+            while (true) {
                 try {
-                    while (true) {
-                        kotlinx.coroutines.delay(1000) // 改为 1 秒
-                        // 检查蓝牙适配器状态
-                        if (bluetoothAdapter == null || !bluetoothAdapter!!.isEnabled) {
-                            Log.e(TAG, "蓝牙适配器不可用，停止 RSSI 轮询")
-                            break
+                    // 关键修复：每次连接前都重新获取蓝牙适配器
+                    val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+                    
+                    if (currentAdapter == null) {
+                        Log.e(TAG, "设备不支持蓝牙")
+                        send(BleConnectionState.Error("设备不支持蓝牙"))
+                        kotlinx.coroutines.delay(5000)
+                        continue
+                    }
+                    
+                    if (!currentAdapter.isEnabled) {
+                        Log.e(TAG, "蓝牙未开启，等待开启")
+                        if (!isReconnecting) {
+                            send(BleConnectionState.Error("请先开启蓝牙"))
                         }
-                        if (bluetoothGatt != null) {
-                            bluetoothGatt?.readRemoteRssi()
-                        } else {
-                            Log.d(TAG, "GATT 未连接，等待重连")
+                        // 等待蓝牙开启，每秒检查一次
+                        while (!currentAdapter.isEnabled) {
+                            kotlinx.coroutines.delay(1000)
+                        }
+                        Log.d(TAG, "蓝牙已开启，尝试重连")
+                        continue
+                    }
+                    
+                    // 更新本地的适配器引用
+                    bluetoothAdapter = currentAdapter
+
+                    if (!isReconnecting) {
+                        _connectionState.value = BleConnectionState.Connecting
+                        send(BleConnectionState.Connecting)
+                    }
+                    
+                    Log.d(TAG, "开始连接设备：$macAddress")
+
+                    bluetoothDevice = try {
+                        currentAdapter.getRemoteDevice(macAddress)
+                    } catch (e: IllegalArgumentException) {
+                        Log.e(TAG, "无效的 MAC 地址：$macAddress", e)
+                        send(BleConnectionState.Error("无效的设备地址"))
+                        kotlinx.coroutines.delay(5000)
+                        continue
+                    } catch (e: SecurityException) {
+                        Log.e(TAG, "缺少蓝牙连接权限", e)
+                        send(BleConnectionState.Error("缺少蓝牙连接权限"))
+                        kotlinx.coroutines.delay(5000)
+                        continue
+                    }
+
+                    try {
+                        bluetoothDevice?.connectGatt(context, false, bleCallback)
+                        Log.d(TAG, "GATT 连接已发起")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "连接 GATT 失败", e)
+                        send(BleConnectionState.Error("连接失败：${e.message}"))
+                        kotlinx.coroutines.delay(5000)
+                        continue
+                    }
+                    
+                    // Start RSSI polling every 1 second
+                    val rssiJob = launch {
+                        try {
+                            while (true) {
+                                kotlinx.coroutines.delay(1000) // 1 秒轮询一次
+                                // 检查蓝牙适配器状态
+                                if (bluetoothAdapter == null || !bluetoothAdapter!!.isEnabled) {
+                                    Log.e(TAG, "蓝牙适配器不可用，停止 RSSI 轮询")
+                                    break
+                                }
+                                if (bluetoothGatt != null) {
+                                    bluetoothGatt?.readRemoteRssi()
+                                } else {
+                                    Log.d(TAG, "GATT 未连接，等待重连")
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "RSSI 轮询失败", e)
                         }
                     }
+                    
+                    awaitClose {
+                        // 取消 RSSI 轮询
+                        rssiJob.cancel()
+                        // 不再自动断开 GATT 连接，保持长连接
+                        Log.d(TAG, "Flow 取消监听，但保持 GATT 连接")
+                    }
+                    
+                    // 如果流程走到这里，说明连接断开了，需要重连
+                    Log.d(TAG, "连接断开，准备重连...")
+                    _connectionState.value = BleConnectionState.Disconnected
+                    send(BleConnectionState.Disconnected)
+                    isReconnecting = true
+                    kotlinx.coroutines.delay(3000) // 3 秒后重连
+                    
                 } catch (e: Exception) {
-                    Log.e(TAG, "RSSI 轮询失败", e)
+                    Log.e(TAG, "连接循环异常", e)
+                    send(BleConnectionState.Error("连接异常：${e.message}"))
+                    isReconnecting = true
+                    kotlinx.coroutines.delay(5000)
                 }
-            }
-            
-            awaitClose {
-                // 不再自动断开连接，保持长连接
-                // 只有用户手动调用 disconnect() 时才会断开
-                Log.d(TAG, "Flow 取消监听，但保持 GATT 连接")
             }
         } catch (e: Exception) {
             Log.e(TAG, "connect 方法异常", e)

@@ -58,6 +58,21 @@ class HomeViewModel @Inject constructor(
         loadDevice()
         observeBleState()
         observeBleEvents()
+        connectToDevice()
+    }
+    
+    private fun connectToDevice() {
+        viewModelScope.launch {
+            try {
+                bleManager.connect(BleManager.I_DEVICE_MAC).collect { state ->
+                    // 自动重连逻辑已在 BleManager 中实现
+                    // 这里只需要监听状态
+                    Log.d("HomeViewModel", "连接状态：${state::class.simpleName}")
+                }
+            } catch (e: Exception) {
+                Log.e("HomeViewModel", "连接失败：${e.message}", e)
+            }
+        }
     }
     
     private fun loadDevice() {

@@ -61,7 +61,7 @@ class HomeViewModel @Inject constructor(
         connectToDevice()
     }
     
-    private fun connectToDevice() {
+    fun connectToDevice() {
         viewModelScope.launch {
             try {
                 bleManager.connect(BleManager.I_DEVICE_MAC).collect { state ->

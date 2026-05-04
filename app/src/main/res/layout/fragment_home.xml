@@ -37,14 +37,32 @@
                 android:orientation="vertical"
                 android:padding="16dp">
 
-                <TextView
-                    android:id="@+id/tv_device_name"
-                    android:layout_width="wrap_content"
+                <LinearLayout
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="iTAG"
-                    android:textSize="24sp"
-                    android:textStyle="bold"
-                    android:textColor="@color/text_primary" />
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical">
+
+                    <TextView
+                        android:id="@+id/tv_device_name"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="iTAG"
+                        android:textSize="24sp"
+                        android:textStyle="bold"
+                        android:textColor="@color/text_primary" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btn_connect_device"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="连接"
+                        android:textSize="14sp"
+                        android:textAllCaps="false"
+                        style="@style/Widget.Material3.Button.OutlinedButton"
+                        app:cornerRadius="8dp" />
+                </LinearLayout>
 
                 <TextView
                     android:id="@+id/tv_connection_status"

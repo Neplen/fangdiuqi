@@ -54,6 +54,7 @@ class HomeFragment : Fragment() {
                 launch {
                     viewModel.connectionState.collect { state ->
                         updateConnectionState(state)
+                        updateConnectButton(state)
                     }
                 }
                 
@@ -103,6 +104,28 @@ class HomeFragment : Fragment() {
         }
     }
     
+    private fun updateConnectButton(state: BleConnectionState) {
+        when (state) {
+            is BleConnectionState.Connected -> {
+                binding.btnConnectDevice.text = "已连接"
+                binding.btnConnectDevice.isEnabled = false
+            }
+            is BleConnectionState.Disconnected -> {
+                binding.btnConnectDevice.text = "连接"
+                binding.btnConnectDevice.isEnabled = true
+            }
+            is BleConnectionState.Connecting -> {
+                binding.btnConnectDevice.text = "连接中..."
+                binding.btnConnectDevice.isEnabled = false
+            }
+            is BleConnectionState.Error -> {
+                binding.btnConnectDevice.text = "连接"
+                binding.btnConnectDevice.isEnabled = true
+            }
+            else -> {}
+        }
+    }
+    
     private fun updateMonitorSwitch(isRunning: Boolean) {
         // 只有当开关当前状态与服务状态不一致时才更新，避免触发 onCheckedChanged
         if (binding.switchMonitor.isChecked != isRunning) {
@@ -113,6 +136,10 @@ class HomeFragment : Fragment() {
     private fun setupClickListeners() {
         binding.btnSearchDevice.setOnClickListener {
             findNavController().navigate(R.id.action_scan)
+        }
+        
+        binding.btnConnectDevice.setOnClickListener {
+            connectToDevice()
         }
         
         binding.btnAlarmDevice.setOnClickListener {
@@ -126,6 +153,11 @@ class HomeFragment : Fragment() {
                 viewModel.stopMonitoring()
             }
         }
+    }
+    
+    private fun connectToDevice() {
+        viewModel.connectToDevice()
+        Snackbar.make(binding.root, "正在连接设备...", Snackbar.LENGTH_SHORT).show()
     }
     
     private fun toggleDeviceAlarm() {

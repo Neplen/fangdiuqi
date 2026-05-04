@@ -52,16 +52,13 @@ class BleManager @Inject constructor(
         const val ALERT_STOP_COMMAND = 0x00.toByte()
     }
 
-    // 所有变量都用 var 声明，确保可以重新赋值
+    // 显式声明所有变量类型
     private var bluetoothAdapter: BluetoothAdapter? = null
     private var bluetoothDevice: BluetoothDevice? = null
     private var bluetoothGatt: BluetoothGatt? = null
     private var alertCharacteristic: BluetoothGattCharacteristic? = null
     private var batteryCharacteristic: BluetoothGattCharacteristic? = null
     private var customCharacteristic: BluetoothGattCharacteristic? = null
-    
-    // 保存要连接的设备地址，用于断连后重连
-    private var deviceMacToConnect: String? = null
     
     // 显式声明 Flow 类型
     private val _connectionState: MutableStateFlow<BleConnectionState> = MutableStateFlow<BleConnectionState>(BleConnectionState.Disconnected)
@@ -76,7 +73,7 @@ class BleManager @Inject constructor(
     private val _bleEvents: MutableSharedFlow<BleEvent> = MutableSharedFlow<BleEvent>()
     val bleEvents: SharedFlow<BleEvent> = _bleEvents.asSharedFlow()
 
-    // 内联初始化 bleCallback，解决 must be initialized 错误
+    // bleCallback 内联初始化
     private val bleCallback: BluetoothGattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             Log.d(TAG, "Connection state changed: $status, newState: $newState")
@@ -87,41 +84,12 @@ class BleManager @Inject constructor(
                     gatt.discoverServices()
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
-                    Log.d(TAG, "设备已断开，准备自动重连...")
+                    Log.d(TAG, "设备已断开")
                     _connectionState.value = BleConnectionState.Disconnected
                     bluetoothGatt = null
                     alertCharacteristic = null
                     batteryCharacteristic = null
                     customCharacteristic = null
-                    
-                    // 自动重连逻辑：3 秒后尝试重连
-                    val macToReconnect = deviceMacToConnect
-                    if (macToReconnect != null) {
-                        try {
-                            Thread {
-                                try {
-                                    Thread.sleep(3000)
-                                    Log.d(TAG, "开始自动重连设备：$macToReconnect")
-                                    
-                                    val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) 
-                                        as? BluetoothManager)?.adapter
-                                    
-                                    if (currentAdapter != null && currentAdapter.isEnabled) {
-                                        bluetoothAdapter = currentAdapter
-                                        val device = currentAdapter.getRemoteDevice(macToReconnect)
-                                        device.connectGatt(context, false, bleCallback)
-                                        Log.d(TAG, "自动重连 GATT 已发起")
-                                    } else {
-                                        Log.e(TAG, "蓝牙未开启，等待开启后重连")
-                                    }
-                                } catch (e: Exception) {
-                                    Log.e(TAG, "自动重连失败", e)
-                                }
-                            }.start()
-                        } catch (e: Exception) {
-                            Log.e(TAG, "自动重连线程启动失败", e)
-                        }
-                    }
                 }
             }
         }
@@ -194,7 +162,7 @@ class BleManager @Inject constructor(
                     Log.d(TAG, "检测到双击事件")
                 } else {
                     // 单击，记录时间
-                    lastButtonPressTime = currentTime
+                    lastPressTime = currentTime
                     Log.d(TAG, "检测到单击事件，等待第二次点击")
                 }
             }
@@ -255,9 +223,6 @@ class BleManager @Inject constructor(
     @SuppressLint("MissingPermission")
     fun connect(macAddress: String): Flow<BleConnectionState> = channelFlow {
         try {
-            // 保存设备地址用于重连
-            deviceMacToConnect = macAddress
-            
             // 每次连接前都重新获取蓝牙适配器
             val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
             
@@ -330,7 +295,7 @@ class BleManager @Inject constructor(
             
             awaitClose {
                 rssiPollJob.cancel()
-                Log.d(TAG, "Flow 取消监听，已停止 RSSI 轮询")
+                Log.d(TAG, "Flow 取消监听")
             }
         } catch (e: Exception) {
             Log.e(TAG, "connect 方法异常", e)
@@ -405,42 +370,31 @@ class BleManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     suspend fun readBatteryLevel(): Int? {
-        return withContext(Dispatchers.IO) {
-            try {
-                batteryCharacteristic?.let { characteristic ->
-                    bluetoothGatt?.readCharacteristic(characteristic)
-                    delay(500)
-                    _batteryLevel.value
+        return try {
+            withContext(Dispatchers.IO) {
+                try {
+                    batteryCharacteristic?.let { characteristic ->
+                        try {
+                            bluetoothGatt?.readCharacteristic(characteristic)
+                            delay(500)
+                            _batteryLevel.value
+                        } catch (e: Exception) {
+                            Log.e(TAG, "读取电池失败", e)
+                            null
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "readBatteryLevel 异常", e)
+                    null
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "读取电池失败", e)
-                null
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "readBatteryLevel 外部异常", e)
+            null
         }
     }
 
     fun isBluetoothEnabled(): Boolean {
         return bluetoothAdapter?.isEnabled == true
-    }
-    
-    /**
-     * 蓝牙关闭后重新开启时，自动重连设备
-     */
-    fun reconnectIfDisconnected() {
-        if (bluetoothGatt == null && deviceMacToConnect != null) {
-            Log.d(TAG, "检测到蓝牙已开启，开始重连设备：${deviceMacToConnect}")
-            val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
-            if (currentAdapter != null && currentAdapter.isEnabled) {
-                try {
-                    bluetoothAdapter = currentAdapter
-                    val device = currentAdapter.getRemoteDevice(deviceMacToConnect!!)
-                    device.connectGatt(context, false, bleCallback)
-                    _connectionState.value = BleConnectionState.Connecting
-                    Log.d(TAG, "蓝牙重连 GATT 已发起")
-                } catch (e: Exception) {
-                    Log.e(TAG, "蓝牙重连失败", e)
-                }
-            }
-        }
     }
 }

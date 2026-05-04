@@ -84,13 +84,13 @@ class SettingsFragment : Fragment() {
                 
                 launch {
                     viewModel.rssiThreshold.collect { threshold ->
-                        binding.etRssiThreshold.setText(threshold.toString())
+                        binding.tvRssiThreshold.text = "$threshold dBm"
                     }
                 }
                 
                 launch {
                     viewModel.alarmDelay.collect { delay ->
-                        binding.etAlarmDelay.setText(delay.toString())
+                        binding.tvAlarmDelay.text = "$delay 秒"
                     }
                 }
                 
@@ -122,22 +122,32 @@ class SettingsFragment : Fragment() {
     }
     
     private fun setupClickListeners() {
-        binding.etRssiThreshold.setOnFocusChangeListener { v, hasFocus ->
-            if (!hasFocus) {
-                val text = binding.etRssiThreshold.text.toString()
-                if (text.isNotEmpty()) {
-                    viewModel.updateRssiThreshold(text.toInt())
+        // RSSI 阈值输入弹窗
+        binding.btnSetRssiThreshold.setOnClickListener {
+            showNumberPickerDialog(
+                title = "设置 RSSI 阈值",
+                initialValue = viewModel.rssiThreshold.value,
+                minValue = -100,
+                maxValue = 0,
+                unit = " dBm",
+                onConfirm = { value ->
+                    viewModel.updateRssiThreshold(value)
                 }
-            }
+            )
         }
         
-        binding.etAlarmDelay.setOnFocusChangeListener { v, hasFocus ->
-            if (!hasFocus) {
-                val text = binding.etAlarmDelay.text.toString()
-                if (text.isNotEmpty()) {
-                    viewModel.updateAlarmDelay(text.toInt())
+        // 报警延迟输入弹窗
+        binding.btnSetAlarmDelay.setOnClickListener {
+            showNumberPickerDialog(
+                title = "设置报警延迟",
+                initialValue = viewModel.alarmDelay.value,
+                minValue = 10,
+                maxValue = 300,
+                unit = " 秒",
+                onConfirm = { value ->
+                    viewModel.updateAlarmDelay(value)
                 }
-            }
+            )
         }
         
         binding.switchWifiDnd.setOnCheckedChangeListener { _, isChecked ->
@@ -197,6 +207,57 @@ class SettingsFragment : Fragment() {
         }
         
         timePicker.show(requireActivity().supportFragmentManager, "time_picker")
+    }
+    
+    private fun showNumberPickerDialog(
+        title: String,
+        initialValue: Int,
+        minValue: Int,
+        maxValue: Int,
+        unit: String,
+        onConfirm: (Int) -> Unit
+    ) {
+        // 创建 EditText 用于输入数字
+        val editText = android.widget.EditText(requireContext()).apply {
+            setText(initialValue.toString())
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER or 
+                       android.text.InputType.TYPE_NUMBER_FLAG_SIGNED
+            setPadding(48, 16, 48, 16)
+            setHint("范围：$minValue ~ $maxValue$unit")
+        }
+        
+        val dialog = MaterialAlertDialogBuilder(requireContext())
+            .setTitle(title)
+            .setView(editText)
+            .setPositiveButton("确定") { _, _ ->
+                val text = editText.text.toString()
+                if (text.isNotEmpty()) {
+                    var value = text.toIntOrNull() ?: initialValue
+                    // 限制在最小值和最大值之间
+                    value = value.coerceIn(minValue, maxValue)
+                    onConfirm(value)
+                }
+            }
+            .setNegativeButton("取消", null)
+            .setNeutralButton("重置") { _, _ ->
+                val newValue = when (title) {
+                    "设置 RSSI 阈值" -> -90
+                    "设置报警延迟" -> 60
+                    else -> initialValue
+                }
+                editText.setText(newValue.toString())
+            }
+            .show()
+        
+        // 点击"重置"按钮时更新输入框
+        dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener {
+            val newValue = when (title) {
+                "设置 RSSI 阈值" -> -90
+                "设置报警延迟" -> 60
+                else -> initialValue
+            }
+            editText.setText(newValue.toString())
+        }
     }
     
     private fun showRingtonePicker() {

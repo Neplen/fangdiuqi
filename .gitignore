@@ -1,82 +1,176 @@
-*.iml
-.gradle
-/local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
-local.properties
+# AI Tools
+.claude
+.gemini
+.opencode
 
-# Compiled class file
-*.class
-
-# Log file
-*.log
-
-# BlueJ files
-*.ctxt
-
-# Mobile Tools for Java (J2ME)
-.mtj.tmp/
-
-# Package Files
-*.jar
-*.war
-*.nar
-*.ear
-*.zip
-*.tar.gz
-*.rar
-
-# virtual machine crash logs
-hs_err_pid*
-
-# Android Studio Navigation editor temp files
-.navigation/
-
-# Android Studio Captures folder
-*.captures
-
-# External native build folder generated in Android Studio 2.2 and later
-.externalNativeBuild
-.cxx/
-
-# Google Services (e.g. APIs or Firebase)
-google-services.json
-
-# Freeline
-freeline.py
-freeline/
-freeline_project_description.json
-
-# fastlane
-fastlane/report.xml
-fastlane/Preview.html
-fastlane/screenshots
-fastlane/test_output
-fastlane/readme.md
-
-# Version control
-vcs.xml
-
-# lint
-lint/intermediates/
-lint/generated/
-lint/outputs/
-lint/tmp/
-# lint/reports/
-
-# Android Profiling
-*.hprof
-
-# Misc
+# IDE and Editors
+**/.idea/
+**/.vscode/
 *.swp
 *.swo
 *~
+**/.project
+**/.classpath
+**/.settings/
+*.sublime-project
+*.sublime-workspace
+**/.spyproject/
+**/.ropeproject/
+*.code-workspace
+
+# macOS
+**/.DS_Store
+**/.AppleDouble
+**/.LSOverride
+**/._*
+**/.Spotlight-V100
+**/.Trashes
+
+# Windows
+**/Thumbs.db
+**/ehthumbs.db
+**/Desktop.ini
+**/$RECYCLE.BIN/
+*.lnk
+
+# Linux
+**/.fuse_hidden*
+**/.nfs*
+
+# Node.js
+**/node_modules/
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+**/.npm
+**/.yarn/cache
+**/.pnpm-store/
+**/*.tsbuild*
+
+# Python
+**/__pycache__/
+*.py[cod]
+*$py.class
+**/.Python
+**/build/
+**/develop-eggs/
+**/dist/
+**/downloads/
+**/eggs/
+**/.eggs/
+**/parts/
+**/sdist/
+**/var/
+**/wheels/
+*.egg-info/
+**/.installed.cfg
+*.egg
+**/.venv/
+**/venv/
+**/ENV/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+
+# Java
+*.class
+*.jar
+*.war
+*.ear
+**/.gradle/
+
+# C/C++/Go/Rust
+*.o
+*.obj
+*.exe
+*.out
+*.app
+*.dll
+*.dylib
+*.so
+*.test
+**/target/
+**/go.work
+**/Cargo.lock
+
+# Ruby
+*.gem
+*.rbc
+**/.bundle/
+**/vendor/bundle
+**/.byebug_history
+
+# Logs
+*.log
+**/logs/
+
+# Environment and secrets
+**/.env
+**/.env.local
+**/.env.*.local
+*.pem
+*.key
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.cache
+**/.cache/
+**/tmp/
+**/temp/
+
+# Dart
+**/.dart_tool/
+**/*.dart_tool
+**/analysis_options.yaml
+**/.packages
+**/.pub-cache/
+**/.pub/
+
+# Flutter
+**/flutter_export_environment.sh
+**/flutter_export_environment.bat
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.flutter-plugins-dependencies.lock
+**/.metadata
+**/.flutter_build
+**/build/
+**/.dart_tool/
+**/ios/Pods/
+**/ios/.symlinks/
+**/ios/Flutter/ephemeral/
+**/ios/Podfile.lock
+**/ios/.generated/
+**/android/**/generated/
+**/android/.gradle/
+**/android/gradlew
+**/android/gradlew.bat
+**/android/local.properties
+**/android/**/GeneratedPluginRegistrant.java
+**/android/**/flutter_*.json
+**/web/.dart_tool/
+**/web/build/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+
+# Compressed files
+*.zip
+*.rar
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+*.tar.bz2
+*.tbz2
+*.tar.xz
+*.txz
+*.gz
+*.bz2
+*.xz
+*.Z
+*.lz
+*.lzma
+*.iso

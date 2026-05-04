@@ -52,7 +52,7 @@ class BleManager @Inject constructor(
         const val ALERT_STOP_COMMAND = 0x00.toByte()
     }
 
-    // 显式声明所有变量类型，避免递归推断问题
+    // 所有变量都用 var 声明，确保可以重新赋值
     private var bluetoothAdapter: BluetoothAdapter? = null
     private var bluetoothDevice: BluetoothDevice? = null
     private var bluetoothGatt: BluetoothGatt? = null
@@ -76,7 +76,7 @@ class BleManager @Inject constructor(
     private val _bleEvents: MutableSharedFlow<BleEvent> = MutableSharedFlow<BleEvent>()
     val bleEvents: SharedFlow<BleEvent> = _bleEvents.asSharedFlow()
 
-    // 显式声明 bleCallback 类型
+    // 内联初始化 bleCallback，解决 must be initialized 错误
     private val bleCallback: BluetoothGattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             Log.d(TAG, "Connection state changed: $status, newState: $newState")
@@ -194,7 +194,7 @@ class BleManager @Inject constructor(
                     Log.d(TAG, "检测到双击事件")
                 } else {
                     // 单击，记录时间
-                    lastPressTime = currentTime
+                    lastButtonPressTime = currentTime
                     Log.d(TAG, "检测到单击事件，等待第二次点击")
                 }
             }
@@ -405,27 +405,17 @@ class BleManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     suspend fun readBatteryLevel(): Int? {
-        return try {
-            withContext(Dispatchers.IO) {
-                try {
-                    batteryCharacteristic?.let { characteristic ->
-                        try {
-                            bluetoothGatt?.readCharacteristic(characteristic)
-                            delay(500)
-                            _batteryLevel.value
-                        } catch (e: Exception) {
-                            Log.e(TAG, "读取电池失败", e)
-                            null
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "readBatteryLevel 异常", e)
-                    null
+        return withContext(Dispatchers.IO) {
+            try {
+                batteryCharacteristic?.let { characteristic ->
+                    bluetoothGatt?.readCharacteristic(characteristic)
+                    delay(500)
+                    _batteryLevel.value
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "读取电池失败", e)
+                null
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "readBatteryLevel 外部异常", e)
-            null
         }
     }
 

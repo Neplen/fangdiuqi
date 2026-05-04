@@ -58,6 +58,9 @@ class BleManager @Inject constructor(
     // 保存要连接的设备地址，用于断连后重连
     private var deviceMacToConnect: String? = null
     
+    // 重连任务引用，显式声明类型
+    private var reconnectJob: Job? = null
+    
     // 显式声明 Flow 类型
     private val _connectionState: MutableStateFlow<BleConnectionState> = MutableStateFlow<BleConnectionState>(BleConnectionState.Disconnected)
     val connectionState: StateFlow<BleConnectionState> = _connectionState.asStateFlow()
@@ -71,7 +74,8 @@ class BleManager @Inject constructor(
     private val _bleEvents: MutableSharedFlow<BleEvent> = MutableSharedFlow<BleEvent>()
     val bleEvents: SharedFlow<BleEvent> = _bleEvents.asSharedFlow()
 
-    private val bleCallback = object : BluetoothGattCallback() {
+    // 显式声明 bleCallback 类型
+    private val bleCallback: BluetoothGattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             Log.d(TAG, "Connection state changed: $status, newState: $newState")
             when (newState) {

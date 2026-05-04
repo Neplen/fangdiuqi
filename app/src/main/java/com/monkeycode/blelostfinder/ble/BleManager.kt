@@ -75,16 +75,136 @@ class BleManager @Inject constructor(
     private val _bleEvents: MutableSharedFlow<BleEvent> = MutableSharedFlow<BleEvent>()
     val bleEvents: SharedFlow<BleEvent> = _bleEvents.asSharedFlow()
 
-    // 显式声明 bleCallback 类型
-    private val bleCallback: BluetoothGattCallback = object : BluetoothGattCallback() {
-        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            Log.d(TAG, "Connection state changed: $status, newState: $newState")
-            when (newState) {
-                BluetoothProfile.STATE_CONNECTED -> {
-                    _connectionState.value = BleConnectionState.Connected
-                    bluetoothGatt = gatt
-                    gatt.discoverServices()
+    // 使用 lazy 延迟初始化 bleCallback，避免递归类型检查问题
+    private val bleCallback: BluetoothGattCallback by lazy {
+        object : BluetoothGattCallback() {
+            override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+                Log.d(TAG, "Connection state changed: $status, newState: $newState")
+                when (newState) {
+                    BluetoothProfile.STATE_CONNECTED -> {
+                        _connectionState.value = BleConnectionState.Connected
+                        bluetoothGatt = gatt
+                        gatt.discoverServices()
+                    }
+                    BluetoothProfile.STATE_DISCONNECTED -> {
+                        Log.d(TAG, "设备已断开，准备自动重连...")
+                        _connectionState.value = BleConnectionState.Disconnected
+                        bluetoothGatt = null
+                        alertCharacteristic = null
+                        batteryCharacteristic = null
+                        customCharacteristic = null
+                        
+                        // 自动重连逻辑：3 秒后尝试重连
+                        val macToReconnect = deviceMacToConnect
+                        if (macToReconnect != null) {
+                            try {
+                                Thread {
+                                    try {
+                                        Thread.sleep(3000)
+                                        Log.d(TAG, "开始自动重连设备：$macToReconnect")
+                                        
+                                        val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) 
+                                            as? BluetoothManager)?.adapter
+                                        
+                                        if (currentAdapter != null && currentAdapter.isEnabled) {
+                                            bluetoothAdapter = currentAdapter
+                                            val device = currentAdapter.getRemoteDevice(macToReconnect)
+                                            device.connectGatt(context, false, bleCallback)
+                                            Log.d(TAG, "自动重连 GATT 已发起")
+                                        } else {
+                                            Log.e(TAG, "蓝牙未开启，等待开启后重连")
+                                        }
+                                    } catch (e: Exception) {
+                                        Log.e(TAG, "自动重连失败", e)
+                                    }
+                                }.start()
+                            } catch (e: Exception) {
+                                Log.e(TAG, "自动重连线程启动失败", e)
+                            }
+                        }
+                    }
                 }
+            }
+
+            override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+                Log.d(TAG, "Services discovered: $status")
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    alertCharacteristic = gatt.getService(ALERT_SERVICE_UUID)
+                        ?.getCharacteristic(ALERT_LEVEL_CHARACTERISTIC_UUID)
+                    
+                    batteryCharacteristic = gatt.getService(BATTERY_SERVICE_UUID)
+                        ?.getCharacteristic(BATTERY_LEVEL_CHARACTERISTIC_UUID)
+                    
+                    customCharacteristic = gatt.getService(CUSTOM_SERVICE_UUID)
+                        ?.getCharacteristic(CUSTOM_CHARACTERISTIC_UUID)
+                    
+                    // Subscribe to custom characteristic for button press
+                    customCharacteristic?.let {
+                        gatt.setCharacteristicNotification(it, true)
+                        it.descriptors.firstOrNull()?.let { descriptor ->
+                            gatt.writeDescriptor(descriptor)
+                        }
+                    }
+                    
+                    // Read battery level
+                    batteryCharacteristic?.let {
+                        gatt.readCharacteristic(it)
+                    }
+                }
+            }
+
+            override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
+                Log.d(TAG, "Characteristic read: ${characteristic.uuid}, status: $status")
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    if (characteristic.uuid == BATTERY_LEVEL_CHARACTERISTIC_UUID) {
+                        _batteryLevel.value = value[0].toInt()
+                    }
+                }
+            }
+
+            override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
+                onCharacteristicValueChanged(characteristic, value)
+            }
+
+            private fun onCharacteristicValueChanged(characteristic: BluetoothGattCharacteristic, value: ByteArray) {
+                Log.d(TAG, "Characteristic changed: ${characteristic.uuid}, value: ${value.contentToString()}")
+                if (characteristic.uuid == CUSTOM_CHARACTERISTIC_UUID) {
+                    // 双击检测逻辑：2 秒内按两次才算双击
+                    val currentTime = System.currentTimeMillis()
+                    val lastPressTime = lastButtonPressTime
+                    
+                    if (currentTime - lastPressTime < DOUBLE_PRESS_TIMEOUT) {
+                        // 检测为双击
+                        lastButtonPressTime = 0
+                        // 使用 Runnable 而不是协程，避免类型推断问题
+                        android.os.Handler(android.os.Looper.getMainLooper()).post {
+                            try {
+                                _bleEvents.tryEmit(BleEvent.DoubleButtonPressed)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "发送双击事件失败", e)
+                            }
+                        }
+                        Log.d(TAG, "检测到双击事件")
+                    } else {
+                        // 单击，记录时间
+                        lastButtonPressTime = currentTime
+                        Log.d(TAG, "检测到单击事件，等待第二次点击")
+                    }
+                }
+            }
+
+            override fun onReadRemoteRssi(gatt: BluetoothGatt, rssi: Int, status: Int) {
+                Log.d(TAG, "RSSI: $rssi, status: $status")
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    _rssi.value = rssi
+                }
+            }
+
+            override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+                Log.d(TAG, "Descriptor write: $status")
+            }
+        }
+    }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.d(TAG, "设备已断开，准备自动重连...")
                     _connectionState.value = BleConnectionState.Disconnected

@@ -9,6 +9,7 @@ import android.util.Log
 import com.monkeycode.blelostfinder.data.repository.DeviceRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -68,7 +69,7 @@ class BleManager @Inject constructor(
     private val _batteryLevel = MutableStateFlow(-1)
     val batteryLevel: StateFlow<Int> = _batteryLevel.asStateFlow()
     
-    private val _bleEvents = MutableSharedFlow<BleEvent>()
+    private val _bleEvents = MutableSharedFlow<BleEvent>(replay = 1)
     val bleEvents: SharedFlow<BleEvent> = _bleEvents.asSharedFlow()
     
     // Handler 用于延迟重连（ avoid recursive type checking issue with coroutines in anonymous objects）
@@ -82,6 +83,8 @@ class BleManager @Inject constructor(
                     _connectionState.value = BleConnectionState.Connected
                     bluetoothGatt = gatt
                     gatt.discoverServices()
+                    // 核心修复：连接成功后启动 RSSI 轮询（确保 GATT 有效）
+                    startRssiPolling()
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.d(TAG, "设备已断开，准备自动重连...")
@@ -90,6 +93,10 @@ class BleManager @Inject constructor(
                     alertCharacteristic = null
                     batteryCharacteristic = null
                     customCharacteristic = null
+                    
+                    // 取消 RSSI 轮询
+                    rssiPollingJob?.cancel()
+                    rssiPollingJob = null
                     
                     // 断连时立即触发防丢器报警（通过 BLE 命令）
                     // 注意：此时 GATT 已断开，无法发送 BLE 命令，需要在 HomeViewModel 中处理
@@ -313,6 +320,107 @@ class BleManager @Inject constructor(
             close()
         }
     }
+    
+   /**
+     * 直接发起连接（不依赖 Flow 收集，用于后台服务）
+     * 这个方法会立即执行连接逻辑，适合在后台场景使用
+     * 
+     * 核心修复：
+     * 1. 强制关闭旧 GATT（即使失败也要重置状态）
+     * 2. 连接成功回调中会自动启动 RSSI 轮询
+     */
+    @SuppressLint("MissingPermission")
+    fun connectDirectly(macAddress: String) {
+        try {
+            // 保存设备地址用于重连
+            deviceMacToConnect = macAddress
+            
+            // 每次连接前都重新获取蓝牙适配器（后台场景必需）
+            val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+            
+            if (currentAdapter == null) {
+                Log.e(TAG, "设备不支持蓝牙")
+                return
+            }
+            
+            if (!currentAdapter.isEnabled) {
+                Log.w(TAG, "蓝牙未开启，等待开启")
+                return
+            }
+            
+            // 更新本地的适配器引用
+            bluetoothAdapter = currentAdapter
+            
+            // 核心修复：强制清理旧 GATT（解决"僵尸 GATT"问题）
+            cleanupGatt()
+
+            _connectionState.value = BleConnectionState.Connecting
+            Log.d(TAG, "直接连接设备：$macAddress")
+
+            bluetoothDevice = try {
+                currentAdapter.getRemoteDevice(macAddress)
+            } catch (e: IllegalArgumentException) {
+                Log.e(TAG, "无效的 MAC 地址：$macAddress", e)
+                return
+            } catch (e: SecurityException) {
+                Log.e(TAG, "缺少蓝牙连接权限", e)
+                return
+            }
+
+            try {
+                // 创建新 GATT 连接
+                bluetoothDevice?.connectGatt(context, false, bleCallback)
+                Log.d(TAG, "GATT 直接连接已发起")
+                
+                // 核心修复 2: 移除这里的 startRssiPolling()
+                // RSSI 轮询会在 onConnectionStateChange(STATE_CONNECTED) 中启动
+                // 这样确保 GATT 完全连接后再开始轮询
+            } catch (e: Exception) {
+                Log.e(TAG, "直接连接 GATT 失败", e)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "connectDirectly 方法异常", e)
+        }
+    }
+    
+    /**
+     * 启动 RSSI 轮询（统一由连接成功回调调用）
+     */
+    private var rssiPollingJob: kotlinx.coroutines.Job? = null
+    
+    private fun startRssiPolling() {
+        // 取消之前的轮询
+        rssiPollingJob?.cancel()
+        
+        // 使用 GlobalScope 启动独立轮询
+        rssiPollingJob = kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.Main) {
+            try {
+                while (true) {
+                    kotlinx.coroutines.delay(1000)  // 1 秒轮询一次
+                    
+                    // 检查蓝牙适配器状态
+                    if (bluetoothAdapter == null || !bluetoothAdapter!!.isEnabled) {
+                        Log.e(TAG, "蓝牙适配器不可用，停止 RSSI 轮询")
+                        break
+                    }
+                    
+                    if (bluetoothGatt != null) {
+                        try {
+                            bluetoothGatt?.readRemoteRssi()
+                        } catch (e: Exception) {
+                            Log.e(TAG, "RSSI 读取失败", e)
+                        }
+                    } else {
+                        Log.d(TAG, "GATT 未连接，停止 RSSI 轮询")
+                        break
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "RSSI 轮询异常", e)
+            }
+        }
+        Log.d(TAG, "RSSI 轮询已启动")
+    }
 
     @SuppressLint("MissingPermission")
     fun disconnect() {
@@ -430,23 +538,95 @@ class BleManager @Inject constructor(
     }
     
     /**
-     * 蓝牙关闭后重新开启时，自动重连设备
+     * 蓝牙关闭后重新开启时，或检测到设备断开时，自动重连设备
+     * 这个方法会在以下场景被调用：
+     * 1. MainActivity 收到蓝牙开启广播
+     * 2. BleMonitorService 定期调用（锁屏状态下）
+     * 3. 用户回到 APP 主页
+     * 
+     * 后台场景核心修复：
+     * - 使用 connectDirectly() 而不是 connect()
+     * - connect() 是 channelFlow，需要被 collect 才会执行
+     * - 后台时 HomeViewModel 可能不被 collect，导致连接逻辑不执行
      */
     fun reconnectIfDisconnected() {
-        if (bluetoothGatt == null && deviceMacToConnect != null) {
-            Log.d(TAG, "检测到蓝牙已开启，开始重连设备：${deviceMacToConnect}")
-            val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
-            if (currentAdapter != null && currentAdapter.isEnabled) {
-                try {
-                    bluetoothAdapter = currentAdapter
-                    val device = currentAdapter.getRemoteDevice(deviceMacToConnect!!)
-                    device.connectGatt(context, false, bleCallback)
-                    _connectionState.value = BleConnectionState.Connecting
-                    Log.d(TAG, "蓝牙重连 GATT 已发起")
-                } catch (e: Exception) {
-                    Log.e(TAG, "蓝牙重连失败", e)
-                }
+        val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+        
+        if (deviceMacToConnect != null && currentAdapter != null && currentAdapter.isEnabled) {
+            try {
+                bluetoothAdapter = currentAdapter
+                
+                // 核心修复：重连前强制清理旧 GATT
+                cleanupGatt()
+                
+                // 直接调用 connectDirectly()
+                connectDirectly(deviceMacToConnect!!)
+                
+                Log.d(TAG, "蓝牙重连已发起：${deviceMacToConnect}")
+            } catch (e: Exception) {
+                Log.e(TAG, "蓝牙重连失败", e)
             }
+        } else {
+            if (deviceMacToConnect == null) {
+                Log.d(TAG, "没有保存的设备地址，跳过重连")
+            } else if (currentAdapter == null) {
+                Log.w(TAG, "蓝牙适配器不可用，等待初始化")
+            } else {
+                Log.w(TAG, "蓝牙未开启，等待用户手动开启")
+            }
+        }
+    }
+    
+    /**
+     * 强制清理 GATT 资源（解决僵尸连接问题）
+     */
+    private fun cleanupGatt() {
+        bluetoothGatt?.let { oldGatt ->
+            try {
+                Log.d(TAG, "清理旧 GATT 资源")
+                
+                // 1. 断开连接
+                try { oldGatt.disconnect() } catch (e: Exception) {}
+                
+                // 2. 关闭 GATT
+                try { oldGatt.close() } catch (e: Exception) {}
+                
+                // 3. 反射关闭内部对象
+                try {
+                    val mBluetoothGattField = oldGatt.javaClass.getDeclaredField("mBluetoothGatt")
+                    mBluetoothGattField.isAccessible = true
+                    val mBluetoothGatt = mBluetoothGattField.get(oldGatt)
+                    if (mBluetoothGatt != null) {
+                        val closeMethod = mBluetoothGatt.javaClass.getMethod("close")
+                        closeMethod.invoke(mBluetoothGatt)
+                    }
+                } catch (e: Exception) {}
+                
+                // 4. 清除回调
+                try {
+                    val callbackField = oldGatt.javaClass.getDeclaredField("mCallback")
+                    callbackField.isAccessible = true
+                    callbackField.set(oldGatt, null)
+                } catch (e: Exception) {}
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "清理 GATT 异常", e)
+            }
+            bluetoothGatt = null
+            alertCharacteristic = null
+            batteryCharacteristic = null
+            customCharacteristic = null
+        }
+    }
+    
+    /**
+     * 发送报警触发事件（Service 调用，通知 ViewModel 显示弹窗）
+     */
+    fun emitAlarmEvent(reason: String) {
+        try {
+            _bleEvents.tryEmit(BleEvent.AlarmTriggered(reason))
+        } catch (e: Exception) {
+            Log.e(TAG, "发送报警事件失败", e)
         }
     }
 }

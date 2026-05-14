@@ -1,6 +1,7 @@
 package com.monkeycode.blelostfinder.ui.home
 
 import android.os.Bundle
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -46,6 +47,23 @@ class HomeFragment : Fragment() {
         
         setupObservers()
         setupClickListeners()
+    }
+    
+    override fun onResume() {
+        super.onResume()
+        
+        // 如果正在报警，显示弹窗（不自动停止）
+        if (viewModel.phoneAlarmTriggered.value) {
+            Log.d("HomeFragment", "onResume: 检测到报警状态，显示弹窗")
+            showPhoneAlarmDialog()
+        }
+        
+        // 如果当前是断开状态，自动尝试重连
+        val currentState = viewModel.connectionState.value
+        if (currentState is BleConnectionState.Disconnected) {
+            Log.d("HomeFragment", "onResume: 检测到断开状态，自动重连")
+            connectToDevice()
+        }
     }
     
     private fun setupObservers() {
@@ -139,7 +157,10 @@ class HomeFragment : Fragment() {
         }
         
         binding.btnConnectDevice.setOnClickListener {
+            // 核心修复：点击"连接"按钮时，强制重新连接
+            // 解决"超过 40 秒回到范围，显示已断开，点击连接无效"的问题
             connectToDevice()
+            Snackbar.make(binding.root, "正在连接设备...", Snackbar.LENGTH_SHORT).show()
         }
         
         binding.btnAlarmDevice.setOnClickListener {
@@ -156,8 +177,12 @@ class HomeFragment : Fragment() {
     }
     
     private fun connectToDevice() {
+        // 核心修复：停止手机报警（如果正在报警）
+        // 解决"回到范围后手机仍在报警，打开 APP 点击连接"的场景
+        viewModel.stopPhoneAlarm()
+        
+        // 触发重连
         viewModel.connectToDevice()
-        Snackbar.make(binding.root, "正在连接设备...", Snackbar.LENGTH_SHORT).show()
     }
     
     private fun toggleDeviceAlarm() {

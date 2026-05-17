@@ -423,12 +423,10 @@ class BleMonitorService : Service() {
                 // ✅ 核心修复：双击在 SERVICE 处理，后台永远生效
                 is BleEvent.DoubleButtonPressed -> {
                     Log.d(TAG, "防丢器双击事件 - SERVICE 处理")
-                    if (isAlarmPlaying) {
-                        stopAlarmIfPlaying()
-                        Log.d(TAG, "双击停止报警")
-                    } else {
+                    // 强制修复：无论状态如何，先停止，再反转
+                    stopAlarmIfPlaying()
+                    if (!isAlarmPlaying) {
                         triggerPhoneAlarm("防丢器双击报警")
-                        Log.d(TAG, "双击触发报警")
                     }
                 }
                 is BleEvent.AlarmTriggered -> {

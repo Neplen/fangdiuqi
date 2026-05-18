@@ -85,7 +85,6 @@ class HomeViewModel @Inject constructor(
         }
     }
     
-    // 🔥 核心修复5：丢弃历史事件，杜绝打开APP重复弹窗
     private fun observeBleEvents() {
         viewModelScope.launch {
             bleManager.bleEvents
@@ -176,8 +175,8 @@ class HomeViewModel @Inject constructor(
         }
     }
     
+    // ✅ 修复：删除重复的context定义，无报错
     fun stopMonitoring() {
-        val context = getApplication<Application>().applicationContext
         val context = getApplication<Application>().applicationContext
         val serviceIntent = Intent(context, BleMonitorService::class.java)
         context.stopService(serviceIntent)

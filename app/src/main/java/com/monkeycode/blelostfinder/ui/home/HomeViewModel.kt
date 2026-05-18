@@ -18,6 +18,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -84,26 +85,28 @@ class HomeViewModel @Inject constructor(
         }
     }
     
+    // 🔥 核心修复5：丢弃历史事件，杜绝打开APP重复弹窗
     private fun observeBleEvents() {
         viewModelScope.launch {
-            bleManager.bleEvents.collect { event ->
-                when (event) {
-                    is BleEvent.ButtonPressed -> {
-                        Log.d("HomeViewModel", "检测到防丢器单击，忽略")
-                    }
-                    // ✅ 核心修复：ViewModel 只处理 UI，不处理铃声
-                    is BleEvent.DoubleButtonPressed -> {
-                        Log.d("HomeViewModel", "UI 收到双击事件")
-                    }
-                    is BleEvent.AlarmTriggered -> {
-                        Log.d("HomeViewModel", "收到报警事件：${event.reason}")
-                        if (!_phoneAlarmTriggered.value) {
-                            _phoneAlarmTriggered.value = true
+            bleManager.bleEvents
+                .drop(1)
+                .collect { event ->
+                    when (event) {
+                        is BleEvent.ButtonPressed -> {
+                            Log.d("HomeViewModel", "检测到防丢器单击，忽略")
                         }
+                        is BleEvent.DoubleButtonPressed -> {
+                            Log.d("HomeViewModel", "UI 收到双击事件")
+                        }
+                        is BleEvent.AlarmTriggered -> {
+                            Log.d("HomeViewModel", "收到报警事件：${event.reason}")
+                            if (!_phoneAlarmTriggered.value) {
+                                _phoneAlarmTriggered.value = true
+                            }
+                        }
+                        else -> {}
                     }
-                    else -> {}
                 }
-            }
         }
     }
     
@@ -140,7 +143,6 @@ class HomeViewModel @Inject constructor(
         }
     }
     
-    // ✅ 仅用于 UI 手动停止
     fun stopPhoneAlarm() {
         try {
             if (_isDeviceAlarmPlaying.value) {
@@ -175,6 +177,7 @@ class HomeViewModel @Inject constructor(
     }
     
     fun stopMonitoring() {
+        val context = getApplication<Application>().applicationContext
         val context = getApplication<Application>().applicationContext
         val serviceIntent = Intent(context, BleMonitorService::class.java)
         context.stopService(serviceIntent)

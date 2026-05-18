@@ -17,7 +17,6 @@ import com.monkeycode.blelostfinder.ble.BleEvent
 import com.monkeycode.blelostfinder.ble.BleManager
 import com.monkeycode.blelostfinder.data.local.SettingsManager
 import com.monkeycode.blelostfinder.data.model.BleDevice
-import com.monkeycode.blelostfinder.data.model.LocationRecord
 import com.monkeycode.blelostfinder.data.repository.DeviceRepository
 import com.monkeycode.blelostfinder.ui.settings.AlarmSoundManager
 import dagger.hilt.android.AndroidEntryPoint
@@ -73,7 +72,12 @@ class BleMonitorService : Service() {
     private var deviceMac: String = BleManager.I_DEVICE_MAC
     
     private var alarmTriggerTime: Long? = null
-    private var isAlarmPlaying = false
+    // 🔥 核心修复1：持久化报警状态，防止系统后台丢失
+    private val alarmPrefs by lazy { getSharedPreferences("BleAlarmPrefs", MODE_PRIVATE) }
+    private var isAlarmPlaying: Boolean
+        get() = alarmPrefs.getBoolean("isAlarmPlaying", false)
+        set(value) = alarmPrefs.edit().putBoolean("isAlarmPlaying", value).apply()
+        
     private var isWifiDndActive = false
     private var currentRssiThreshold = DEFAULT_RSSI_THRESHOLD
     private var currentAlarmDelay = DEFAULT_ALARM_DELAY
@@ -194,7 +198,8 @@ class BleMonitorService : Service() {
             "BleLostFinder::MonitorWakeLock"
         ).apply {
             setReferenceCounted(false)
-            acquire(10 * 60 * 1000L)
+            // 🔥 保活优化：30分钟超时（可自行修改时长）
+            acquire(30 * 60 * 1000L)
         }
         
         wifiLock = wifiManager?.createWifiLock(
@@ -304,7 +309,6 @@ class BleMonitorService : Service() {
                 }
             }
             
-            // 监听 BLE 事件（双击、断连等）
             serviceScope.launch {
                 try {
                     bleManager.bleEvents.collect { event ->
@@ -390,8 +394,6 @@ class BleMonitorService : Service() {
                 is BleConnectionState.Disconnected -> {
                     Log.d(TAG, "Disconnected from device，设备已断开")
                     
-                    recordDisconnectionLocation(deviceMac)
-                    
                     currentDevice?.let { device ->
                         deviceRepository.updateDevice(device.copy(
                             lastDisconnectedTime = System.currentTimeMillis(),
@@ -420,25 +422,17 @@ class BleMonitorService : Service() {
                 is BleEvent.ButtonPressed -> {
                     Log.d(TAG, "Device button single press - ignored")
                 }
-                // ✅ 核心修复：双击在 SERVICE 处理，后台永远生效
+                // 🔥 核心修复2：完美双击开关逻辑
                 is BleEvent.DoubleButtonPressed -> {
                     Log.d(TAG, "防丢器双击事件 - SERVICE 处理")
-    
-                    // 先记录当前状态
                     val wasPlaying = isAlarmPlaying
-    
-                    // 强制停止
                     stopAlarmIfPlaying()
-    
-                    // 只有之前是关闭的，才重新打开
                     if (!wasPlaying) {
                         triggerPhoneAlarm("防丢器双击报警")
                     }
                 }
-                is BleEvent.AlarmTriggered -> {
-                }
-                is BleEvent.Disconnected -> {
-                }
+                is BleEvent.AlarmTriggered -> {}
+                is BleEvent.Disconnected -> {}
                 else -> {}
             }
         }
@@ -448,6 +442,7 @@ class BleMonitorService : Service() {
         Log.d(TAG, "Device disconnected: $deviceMac (location recording disabled)")
     }
 
+    // 🔥 核心修复3：重写报警触发逻辑
     private fun triggerPhoneAlarm(reason: String) {
         if (isAlarmPlaying) {
             Log.d(TAG, "Alarm already playing, skipping")
@@ -475,11 +470,12 @@ class BleMonitorService : Service() {
         }
     }
 
+    // 🔥 核心修复4：强制停止所有报警，无状态依赖
     private fun stopAlarmIfPlaying() {
+        try { bleManager.stopAlarm() } catch (e: Exception) { Log.e(TAG, "停止防丢器失败", e) }
+        try { alarmSoundManager.stopPlaying() } catch (e: Exception) { Log.e(TAG, "停止铃声失败", e) }
         isAlarmPlaying = false
-        bleManager.stopAlarm()
-        alarmSoundManager.stopPlaying()
-        Log.d(TAG, "SERVICE：已停止所有报警")
+        Log.d(TAG, "SERVICE：已强制停止所有报警")
     }
 
     private fun isInDndMode(): Boolean {

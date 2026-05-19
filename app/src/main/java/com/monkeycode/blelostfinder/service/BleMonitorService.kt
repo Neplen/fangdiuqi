@@ -199,7 +199,7 @@ class BleMonitorService : Service() {
         ).apply {
             setReferenceCounted(false)
             // 🔥 保活优化：30分钟超时（可自行修改时长）
-            acquire(30 * 60 * 1000L)
+            acquire(1440 * 60 * 1000L)
         }
         
         wifiLock = wifiManager?.createWifiLock(

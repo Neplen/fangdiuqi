@@ -476,7 +476,7 @@ class BleMonitorService : Service() {
 
     // 核心修复：去掉内部 serviceScope.launch，直接在锁内同步执行
     // 状态设置和声音播放必须在同一把锁内完成，防止并发覆盖 mediaPlayer
-    private fun triggerPhoneAlarmLocked(reason: String) {
+    private suspend fun triggerPhoneAlarmLocked(reason: String) {
         if (isInDndMode()) {
             Log.d(TAG, "In DND mode, not triggering alarm: $reason")
             return

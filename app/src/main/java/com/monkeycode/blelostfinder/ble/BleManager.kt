@@ -8,8 +8,10 @@ import android.os.Looper
 import android.util.Log
 import com.monkeycode.blelostfinder.data.repository.DeviceRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -29,7 +31,6 @@ class BleManager @Inject constructor(
         private const val DOUBLE_PRESS_TIMEOUT = 2000L
         private var lastButtonPressTime = 0L
 
-        // 核心修复：双击冷却期，防止一次物理双击产生多个事件
         private var lastDoubleClickTime = 0L
         private const val DOUBLE_CLICK_COOLDOWN = 800L
 
@@ -67,11 +68,11 @@ class BleManager @Inject constructor(
     private val _batteryLevel = MutableStateFlow(-1)
     val batteryLevel: StateFlow<Int> = _batteryLevel.asStateFlow()
 
-    // 核心修复：replay=0 避免过夜后旧事件，extraBufferCapacity=1 确保 tryEmit/emit 有缓冲空间
+    // replay=0 避免过夜后旧事件，extraBufferCapacity=1 提供缓冲
     private val _bleEvents = MutableSharedFlow<BleEvent>(replay = 0, extraBufferCapacity = 1)
     val bleEvents: SharedFlow<BleEvent> = _bleEvents.asSharedFlow()
 
-    // 核心修复：使用独立协程作用域调用 emit，确保事件不丢失
+    // 核心修复：使用 CoroutineScope(Dispatchers.Main + SupervisorJob()) 正确构造协程作用域
     private val managerScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -97,7 +98,7 @@ class BleManager @Inject constructor(
                     rssiPollingJob?.cancel()
                     rssiPollingJob = null
 
-                    // 核心修复：使用 emit 代替 tryEmit，确保事件不丢失
+                    // 核心修复：使用 managerScope.launch + emit，确保事件不丢失
                     managerScope.launch {
                         try {
                             _bleEvents.emit(BleEvent.Disconnected)
@@ -179,7 +180,7 @@ class BleManager @Inject constructor(
                     lastButtonPressTime = 0
                     lastDoubleClickTime = currentTime
 
-                    // 核心修复：使用 emit 代替 tryEmit，确保事件不丢失
+                    // 核心修复：使用 managerScope.launch + emit，确保事件不丢失
                     managerScope.launch {
                         try {
                             _bleEvents.emit(BleEvent.DoubleButtonPressed)
@@ -555,7 +556,7 @@ class BleManager @Inject constructor(
         }
     }
 
-    // 核心修复：使用 suspend emit 代替 tryEmit，确保事件不丢失
+    // 核心修复：suspend 函数，使用 emit 代替 tryEmit
     suspend fun emitAlarmEvent(reason: String) {
         try {
             _bleEvents.emit(BleEvent.AlarmTriggered(reason))

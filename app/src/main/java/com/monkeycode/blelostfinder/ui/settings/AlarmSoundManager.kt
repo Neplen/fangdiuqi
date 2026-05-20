@@ -22,23 +22,22 @@ class AlarmSoundManager @Inject constructor(
         private const val TAG = "AlarmSoundManager"
         private const val RECORDING_FILE_NAME = "alarm_sound.m4a"
     }
-    
+
     private var mediaPlayer: MediaPlayer? = null
     private var mediaRecorder: MediaRecorder? = null
     private var isRecording = false
     private var recordingFilePath: String = getRecordingFilePath()
-    
+
     private val contextApp get() = context.applicationContext
-    
+
     fun initializeRecordingDir() {
         try {
-            // 完整路径：/storage/emulated/0/Android/data/com.monkeycode.blelostfinder/files/Music/alarms/
             val baseDir = contextApp.getExternalFilesDir(null)
             if (baseDir == null) {
                 Log.e(TAG, "无法获取外部文件目录")
                 return
             }
-            
+
             val audioDir = File(baseDir, "Music/alarms")
             if (!audioDir.exists()) {
                 val created = audioDir.mkdirs()
@@ -50,12 +49,10 @@ class AlarmSoundManager @Inject constructor(
             Log.e(TAG, "创建录音目录失败", e)
         }
     }
-    
+
     fun getRecordingFilePath(): String {
-        // 确保目录存在
         initializeRecordingDir()
-        
-        // 完整路径：/storage/emulated/0/Android/data/com.monkeycode.blelostfinder/files/Music/alarms/alarm_sound.m4a
+
         val baseDir = contextApp.getExternalFilesDir(null)
         if (baseDir == null) {
             Log.e(TAG, "无法获取外部文件目录，使用默认路径")
@@ -63,19 +60,19 @@ class AlarmSoundManager @Inject constructor(
             val file = File(audioDir, RECORDING_FILE_NAME)
             return file.absolutePath
         }
-        
+
         val audioDir = File(baseDir, "Music/alarms")
         val file = File(audioDir, RECORDING_FILE_NAME)
         Log.d(TAG, "录音文件路径：${file.absolutePath}")
         return file.absolutePath
     }
-    
+
     @Suppress("DEPRECATION")
     fun startRecording(): Boolean {
         if (isRecording) return false
-        
+
         val filePath = getRecordingFilePath()
-        
+
         try {
             mediaRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 MediaRecorder(contextApp)
@@ -89,7 +86,7 @@ class AlarmSoundManager @Inject constructor(
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                 setAudioEncodingBitRate(128000)
                 setAudioSamplingRate(44100)
-                
+
                 try {
                     prepare()
                     start()
@@ -106,12 +103,12 @@ class AlarmSoundManager @Inject constructor(
             return false
         }
     }
-    
+
     fun stopRecording(): String? {
         if (!isRecording) return null
-        
+
         val filePath = getRecordingFilePath()
-        
+
         try {
             mediaRecorder?.apply {
                 stop()
@@ -127,32 +124,92 @@ class AlarmSoundManager @Inject constructor(
             isRecording = false
         }
     }
-    
+
     fun isRecording(): Boolean = isRecording
-    
+
+    // 核心修复：加 synchronized 防止多协程竞争 mediaPlayer 实例导致铃声叠加
     fun playAlarm(ringtonePath: String?) {
-        stopPlaying()
-        
-        // 空路径或 null 表示播放系统默认铃声
-        if (ringtonePath.isNullOrEmpty()) {
-            Log.d(TAG, "No custom ringtone path, playing default alarm")
-            playDefaultAlarm()
-            return
-        }
-        
-        // 检查是否是 URI 格式
-        if (ringtonePath.startsWith("android.resource://") || 
-            ringtonePath.startsWith("content://")) {
-            // URI 格式，使用 Uri 解析
-            val uri = try {
-                android.net.Uri.parse(ringtonePath)
-                android.net.Uri.parse(ringtonePath)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to parse ringtone URI", e)
-                playDefaultAlarm()
+        synchronized(this) {
+            stopPlayingInternal()
+
+            if (ringtonePath.isNullOrEmpty()) {
+                Log.d(TAG, "No custom ringtone path, playing default alarm")
+                playDefaultAlarmInternal()
                 return
             }
-            
+
+            if (ringtonePath.startsWith("android.resource://") || 
+                ringtonePath.startsWith("content://")) {
+                val uri = try {
+                    android.net.Uri.parse(ringtonePath)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to parse ringtone URI", e)
+                    playDefaultAlarmInternal()
+                    return
+                }
+
+                try {
+                    mediaPlayer = MediaPlayer().apply {
+                        setDataSource(contextApp, uri)
+                        setAudioStreamType(AudioManager.STREAM_RING)
+                        setAudioAttributes(
+                            AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_ALARM)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                .build()
+                        )
+                        prepare()
+                        isLooping = true
+                        start()
+                        Log.d(TAG, "Playing ringtone from URI: $ringtonePath")
+                    }
+                    return
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to play ringtone from URI", e)
+                    playDefaultAlarmInternal()
+                    return
+                }
+            }
+
+            val file = File(ringtonePath)
+
+            if (!file.exists()) {
+                Log.d(TAG, "Custom alarm file not found, using default")
+                playDefaultAlarmInternal()
+                return
+            }
+
+            try {
+                mediaPlayer = MediaPlayer().apply {
+                    setDataSource(ringtonePath)
+                    setAudioStreamType(AudioManager.STREAM_RING)
+                    setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ALARM)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    )
+                    prepare()
+                    isLooping = true
+                    start()
+                    Log.d(TAG, "Playing custom alarm: $ringtonePath")
+                }
+            } catch (e: IOException) {
+                Log.e(TAG, "Failed to play custom alarm", e)
+                playDefaultAlarmInternal()
+            }
+        }
+    }
+
+    fun previewRingtone(uri: android.net.Uri?) {
+        synchronized(this) {
+            stopPlayingInternal()
+
+            if (uri == null) {
+                playDefaultAlarmInternal()
+                return
+            }
+
             try {
                 mediaPlayer = MediaPlayer().apply {
                     setDataSource(contextApp, uri)
@@ -164,91 +221,28 @@ class AlarmSoundManager @Inject constructor(
                             .build()
                     )
                     prepare()
-                    isLooping = true
+                    isLooping = false
                     start()
-                    Log.d(TAG, "Playing ringtone from URI: $ringtonePath")
                 }
-                return
+                Log.d(TAG, "Previewing ringtone")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to play ringtone from URI", e)
-                playDefaultAlarm()
-                return
+                Log.e(TAG, "Failed to preview ringtone", e)
             }
-        }
-        
-        // 文件路径格式，使用 File 对象
-        val file = File(ringtonePath)
-        
-        if (!file.exists()) {
-            Log.d(TAG, "Custom alarm file not found, using default")
-            playDefaultAlarm()
-            return
-        }
-        
-        try {
-            mediaPlayer = MediaPlayer().apply {
-                setDataSource(ringtonePath)
-                // 使用响铃音量流，而不是媒体音量
-                setAudioStreamType(AudioManager.STREAM_RING)
-                setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ALARM)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .build()
-                )
-                prepare()
-                isLooping = true
-                start()
-                Log.d(TAG, "Playing custom alarm: $ringtonePath")
-            }
-        } catch (e: IOException) {
-            Log.e(TAG, "Failed to play custom alarm", e)
-            playDefaultAlarm()
         }
     }
-    
-    // 添加预览播放方法
-    fun previewRingtone(uri: android.net.Uri?) {
-        stopPlaying()
-        
-        if (uri == null) {
-            playDefaultAlarm()
-            return
-        }
-        
-        try {
-            mediaPlayer = MediaPlayer().apply {
-                setDataSource(contextApp, uri)
-                setAudioStreamType(AudioManager.STREAM_RING)
-                setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ALARM)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .build()
-                )
-                prepare()
-                isLooping = false  // 预览只播放一次
-                start()
-            }
-            Log.d(TAG, "Previewing ringtone")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to preview ringtone", e)
-        }
-    }
-    
-    // 停止预览并回放默认铃声（如果正在播放）
+
     fun stopPreview() {
         stopPlaying()
     }
-    
-    private fun playDefaultAlarm() {
+
+    private fun playDefaultAlarmInternal() {
         try {
             val alarmUri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_ALARM)
             if (alarmUri == null) {
                 Log.e(TAG, "默认报警铃能为空")
                 return
             }
-            
+
             mediaPlayer = MediaPlayer().apply {
                 setDataSource(contextApp, alarmUri)
                 setAudioStreamType(AudioManager.STREAM_RING)
@@ -267,8 +261,24 @@ class AlarmSoundManager @Inject constructor(
             Log.e(TAG, "Failed to play default alarm", e)
         }
     }
-    
+
+    // 核心修复：提供 isPlaying() 方法，供 ViewModel 启动时检测是否在响铃
+    fun isPlaying(): Boolean {
+        return try {
+            mediaPlayer?.isPlaying == true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    // 对外公开的 stopPlaying，也加锁
     fun stopPlaying() {
+        synchronized(this) {
+            stopPlayingInternal()
+        }
+    }
+
+    private fun stopPlayingInternal() {
         try {
             mediaPlayer?.apply {
                 if (isPlaying) {
@@ -282,7 +292,7 @@ class AlarmSoundManager @Inject constructor(
             mediaPlayer = null
         }
     }
-    
+
     fun cleanup() {
         stopPlaying()
         stopRecording()

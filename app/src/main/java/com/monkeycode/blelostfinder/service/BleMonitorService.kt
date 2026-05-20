@@ -17,6 +17,7 @@ import com.monkeycode.blelostfinder.ble.BleEvent
 import com.monkeycode.blelostfinder.ble.BleManager
 import com.monkeycode.blelostfinder.data.local.SettingsManager
 import com.monkeycode.blelostfinder.data.model.BleDevice
+import com.monkeycode.blelostfinder.data.model.LocationRecord
 import com.monkeycode.blelostfinder.data.repository.DeviceRepository
 import com.monkeycode.blelostfinder.ui.settings.AlarmSoundManager
 import dagger.hilt.android.AndroidEntryPoint
@@ -24,6 +25,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -31,6 +33,8 @@ import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.Calendar
 import javax.inject.Inject
 
@@ -41,10 +45,13 @@ class BleMonitorService : Service() {
         private const val NOTIFICATION_CHANNEL_ID = "ble_monitor_channel"
         private const val NOTIFICATION_ID = 1001
         private const val ACTION_STOP_MONITORING = "com.monkeycode.blelostfinder.STOP_MONITORING"
-        
+
+        // 核心修复：新增外部停止命令，供 ViewModel 点击"好的"时通知 Service 重置状态
+        const val ACTION_STOP_PHONE_ALARM = "com.monkeycode.blelostfinder.STOP_PHONE_ALARM"
+
         private const val DEFAULT_RSSI_THRESHOLD = -90
         private const val DEFAULT_ALARM_DELAY = 60
-        
+
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
     }
@@ -57,37 +64,34 @@ class BleMonitorService : Service() {
 
     @Inject
     lateinit var deviceRepository: DeviceRepository
-    
+
     @Inject
     lateinit var alarmSoundManager: AlarmSoundManager
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    
+
+    // 核心修复：使用 Mutex 保护报警状态，防止并发事件导致状态竞争和铃声叠加
+    private val alarmMutex = Mutex()
+
     private lateinit var notificationManager: NotificationManager
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiManager: WifiManager? = null
-    
+
     private var isMonitoring = false
     private var currentDevice: BleDevice? = null
     private var deviceMac: String = BleManager.I_DEVICE_MAC
-    
+
     private var alarmTriggerTime: Long? = null
-    // 🔥 核心修复1：持久化报警状态，防止系统后台丢失
-    private val alarmPrefs by lazy { getSharedPreferences("BleAlarmPrefs", MODE_PRIVATE) }
-    private var isAlarmPlaying: Boolean
-        get() = alarmPrefs.getBoolean("isAlarmPlaying", false)
-        set(value) = alarmPrefs.edit().putBoolean("isAlarmPlaying", value).apply()
-        
+    private var isAlarmPlaying = false
     private var isWifiDndActive = false
     private var currentRssiThreshold = DEFAULT_RSSI_THRESHOLD
     private var currentAlarmDelay = DEFAULT_ALARM_DELAY
-    
+
     private var deviceAlarmRetriggerTime: Long? = null
     private val DEVICE_ALARM_RETRY_INTERVAL = 30000L
-    
+
     private var wifiLock: WifiManager.WifiLock? = null
     private var rssiMonitorJob: kotlinx.coroutines.Job? = null
-    
     private var heartbeatJob: kotlinx.coroutines.Job? = null
     private val HEARTBEAT_INTERVAL = 60000L
 
@@ -104,7 +108,7 @@ class BleMonitorService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
             Log.d(TAG, "Service started with intent: ${intent?.action}")
-            
+
             when (intent?.action) {
                 ACTION_STOP_MONITORING -> {
                     stopMonitoring()
@@ -112,18 +116,30 @@ class BleMonitorService : Service() {
                     stopSelf()
                     return START_NOT_STICKY
                 }
+                // 核心修复：处理 ViewModel 发来的停止命令
+                ACTION_STOP_PHONE_ALARM -> {
+                    serviceScope.launch {
+                        alarmMutex.withLock {
+                            if (isAlarmPlaying) {
+                                stopAlarmIfPlayingLocked()
+                                Log.d(TAG, "收到外部停止命令，已重置报警状态")
+                            }
+                        }
+                    }
+                    // 继续执行下面的前台服务启动逻辑，确保服务存活
+                }
             }
-    
+
             try {
                 startForeground(NOTIFICATION_ID, createNotification())
                 Log.d(TAG, "前台服务启动成功")
             } catch (e: Exception) {
                 Log.e(TAG, "startForeground 失败", e)
             }
-            
+
             acquireWakeLock()
             startMonitoring()
-            
+
             Log.d(TAG, "监控服务启动完成")
             return START_STICKY
         } catch (e: Exception) {
@@ -198,10 +214,9 @@ class BleMonitorService : Service() {
             "BleLostFinder::MonitorWakeLock"
         ).apply {
             setReferenceCounted(false)
-            // 🔥 保活优化：30分钟超时（可自行修改时长）
-            acquire(1440 * 60 * 1000L)
+            acquire(10 * 60 * 1000L)
         }
-        
+
         wifiLock = wifiManager?.createWifiLock(
             WifiManager.WIFI_MODE_FULL_HIGH_PERF,
             "BleLostFinder::WifiLock"
@@ -218,7 +233,7 @@ class BleMonitorService : Service() {
             }
         }
         wakeLock = null
-        
+
         wifiLock?.let {
             if (it.isHeld) {
                 it.release()
@@ -234,7 +249,7 @@ class BleMonitorService : Service() {
         }
 
         isMonitoring = true
-        
+
         try {
             serviceScope.launch {
                 try {
@@ -260,7 +275,7 @@ class BleMonitorService : Service() {
                     Log.e(TAG, "设备加载失败", e)
                 }
             }
-            
+
             serviceScope.launch {
                 try {
                     settingsManager.isWifiDndEnabled.collect { enabled ->
@@ -271,7 +286,7 @@ class BleMonitorService : Service() {
                     Log.e(TAG, "WiFi DND 收集失败", e)
                 }
             }
-            
+
             serviceScope.launch {
                 try {
                     bleManager.connectionState.collect { state ->
@@ -281,7 +296,7 @@ class BleMonitorService : Service() {
                     Log.e(TAG, "连接状态监听失败", e)
                 }
             }
-            
+
             serviceScope.launch {
                 try {
                     kotlinx.coroutines.coroutineScope {
@@ -296,7 +311,7 @@ class BleMonitorService : Service() {
                                 }
                                 .launchIn(this)
                         }
-                        
+
                         launch {
                             settingsManager.isWifiDndEnabled.collect { enabled ->
                                 isWifiDndActive = enabled && isWifiConnected()
@@ -308,7 +323,7 @@ class BleMonitorService : Service() {
                     Log.e(TAG, "设置监听失败", e)
                 }
             }
-            
+
             serviceScope.launch {
                 try {
                     bleManager.bleEvents.collect { event ->
@@ -322,27 +337,27 @@ class BleMonitorService : Service() {
                     Log.e(TAG, "BLE 事件收集失败", e)
                 }
             }
-            
+
             startRssiMonitoring()
             startHeartbeat()
-            
+
             Log.d(TAG, "Monitoring started")
         } catch (e: Exception) {
             Log.e(TAG, "startMonitoring 异常", e)
         }
     }
-    
+
     private fun startHeartbeat() {
         heartbeatJob = serviceScope.launch {
             while (isMonitoring) {
-                kotlinx.coroutines.delay(HEARTBEAT_INTERVAL)
-                
+                delay(HEARTBEAT_INTERVAL)
+
                 val connectionState = bleManager.connectionState.value
                 if (connectionState is BleConnectionState.Disconnected) {
                     Log.d(TAG, "心跳检测：设备断开，触发重连")
                     bleManager.reconnectIfDisconnected()
                 }
-                
+
                 notificationManager.notify(NOTIFICATION_ID, createNotification())
             }
         }
@@ -352,17 +367,21 @@ class BleMonitorService : Service() {
     private fun stopMonitoring() {
         isMonitoring = false
         rssiMonitorJob?.cancel()
-        stopAlarmIfPlaying()
+        serviceScope.launch {
+            alarmMutex.withLock {
+                stopAlarmIfPlayingLocked()
+            }
+        }
         Log.d(TAG, "Monitoring stopped")
     }
 
     private fun startRssiMonitoring() {
         rssiMonitorJob = serviceScope.launch {
             while (isMonitoring) {
-                kotlinx.coroutines.delay(1000)
-                
+                delay(1000)
+
                 val connectionState = bleManager.connectionState.value
-                
+
                 if (connectionState is BleConnectionState.Disconnected) {
                     bleManager.reconnectIfDisconnected()
                 }
@@ -378,12 +397,14 @@ class BleMonitorService : Service() {
                     Log.d(TAG, "Connected to device，连接成功")
                     alarmTriggerTime = null
                     deviceAlarmRetriggerTime = null
-                    
+
                     if (isAlarmPlaying) {
-                        stopAlarmIfPlaying()
+                        alarmMutex.withLock {
+                            stopAlarmIfPlayingLocked()
+                        }
                         Log.d(TAG, "设备已重连，立即停止所有报警")
                     }
-                    
+
                     currentDevice?.let { device ->
                         deviceRepository.updateDevice(device.copy(
                             lastConnectedTime = System.currentTimeMillis(),
@@ -393,16 +414,20 @@ class BleMonitorService : Service() {
                 }
                 is BleConnectionState.Disconnected -> {
                     Log.d(TAG, "Disconnected from device，设备已断开")
-                    
+
+                    recordDisconnectionLocation(deviceMac)
+
                     currentDevice?.let { device ->
                         deviceRepository.updateDevice(device.copy(
                             lastDisconnectedTime = System.currentTimeMillis(),
                             updatedAt = System.currentTimeMillis()
                         ))
                     }
-                    
-                    if (!isAlarmPlaying) {
-                        triggerPhoneAlarm("断连报警")
+
+                    alarmMutex.withLock {
+                        if (!isAlarmPlaying) {
+                            triggerPhoneAlarmLocked("断连报警")
+                        }
                     }
                 }
                 is BleConnectionState.Connecting -> {
@@ -416,25 +441,32 @@ class BleMonitorService : Service() {
         }
     }
 
+    // 核心修复：双击事件由 Service 统一串行处理，使用 Mutex 保证原子性
     private fun handleBleEvent(event: BleEvent) {
-        serviceScope.launch {
-            when (event) {
-                is BleEvent.ButtonPressed -> {
-                    Log.d(TAG, "Device button single press - ignored")
-                }
-                // 🔥 核心修复2：完美双击开关逻辑
-                is BleEvent.DoubleButtonPressed -> {
-                    Log.d(TAG, "防丢器双击事件 - SERVICE 处理")
-                    val wasPlaying = isAlarmPlaying
-                    stopAlarmIfPlaying()
-                    if (!wasPlaying) {
-                        triggerPhoneAlarm("防丢器双击报警")
+        when (event) {
+            is BleEvent.ButtonPressed -> {
+                Log.d(TAG, "Device button single press - ignored")
+            }
+            is BleEvent.DoubleButtonPressed -> {
+                serviceScope.launch {
+                    alarmMutex.withLock {
+                        if (isAlarmPlaying) {
+                            Log.d(TAG, "检测到双击，正在报警中，停止报警")
+                            stopAlarmIfPlayingLocked()
+                        } else {
+                            Log.d(TAG, "检测到双击，触发手机报警")
+                            triggerPhoneAlarmLocked("防丢器双击触发")
+                        }
                     }
                 }
-                is BleEvent.AlarmTriggered -> {}
-                is BleEvent.Disconnected -> {}
-                else -> {}
             }
+            is BleEvent.AlarmTriggered -> {
+                // Service 触发报警时自己发送的事件，无需处理
+            }
+            is BleEvent.Disconnected -> {
+                // 断连事件已在 handleConnectionState 中处理
+            }
+            else -> {}
         }
     }
 
@@ -442,40 +474,42 @@ class BleMonitorService : Service() {
         Log.d(TAG, "Device disconnected: $deviceMac (location recording disabled)")
     }
 
-    // 🔥 核心修复3：重写报警触发逻辑
-    private fun triggerPhoneAlarm(reason: String) {
-        if (isAlarmPlaying) {
-            Log.d(TAG, "Alarm already playing, skipping")
-            return
-        }
-        
+    // 核心修复：去掉内部 serviceScope.launch，直接在锁内同步执行
+    // 状态设置和声音播放必须在同一把锁内完成，防止并发覆盖 mediaPlayer
+    private fun triggerPhoneAlarmLocked(reason: String) {
         if (isInDndMode()) {
             Log.d(TAG, "In DND mode, not triggering alarm: $reason")
             return
         }
-        
+
         isAlarmPlaying = true
         Log.d(TAG, "Triggering phone alarm: $reason")
-        
-        serviceScope.launch {
-            try {
-                alarmSoundManager.stopPlaying()
-                val ringtonePath = settingsManager.alarmRingtonePath.firstOrNull()
-                alarmSoundManager.playAlarm(ringtonePath)
-                bleManager.emitAlarmEvent(reason)
-            } catch (e: Exception) {
-                Log.e(TAG, "触发报警失败", e)
-                isAlarmPlaying = false
-            }
+
+        try {
+            alarmSoundManager.stopPlaying()
+            val ringtonePath = settingsManager.alarmRingtonePath.firstOrNull()
+            alarmSoundManager.playAlarm(ringtonePath)
+            bleManager.emitAlarmEvent(reason)
+        } catch (e: Exception) {
+            Log.e(TAG, "触发报警失败", e)
+            isAlarmPlaying = false
         }
     }
 
-    // 🔥 核心修复4：强制停止所有报警，无状态依赖
-    private fun stopAlarmIfPlaying() {
-        try { bleManager.stopAlarm() } catch (e: Exception) { Log.e(TAG, "停止防丢器失败", e) }
-        try { alarmSoundManager.stopPlaying() } catch (e: Exception) { Log.e(TAG, "停止铃声失败", e) }
+    // 锁内版本，供 Mutex 保护的路径调用
+    private fun stopAlarmIfPlayingLocked() {
         isAlarmPlaying = false
-        Log.d(TAG, "SERVICE：已强制停止所有报警")
+        bleManager.stopAlarm()
+        alarmSoundManager.stopPlaying()
+    }
+
+    // 兼容旧调用路径（如 onDestroy、stopMonitoring），异步获取锁
+    private fun stopAlarmIfPlaying() {
+        serviceScope.launch {
+            alarmMutex.withLock {
+                stopAlarmIfPlayingLocked()
+            }
+        }
     }
 
     private fun isInDndMode(): Boolean {
@@ -483,18 +517,18 @@ class BleMonitorService : Service() {
             Log.d(TAG, "WiFi DND is active")
             return true
         }
-        
+
         val calendar = Calendar.getInstance()
         val currentTime = calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE)
-        
+
         val currentDevice = this.currentDevice ?: return false
-        
+
         val (startHour, startMinute) = currentDevice.dndStartTime.split(":").map { it.toInt() }
         val (endHour, endMinute) = currentDevice.dndEndTime.split(":").map { it.toInt() }
-        
+
         val startTime = startHour * 60 + startMinute
         val endTime = endHour * 60 + endMinute
-        
+
         return if (startTime <= endTime) {
             currentTime in startTime..endTime
         } else {

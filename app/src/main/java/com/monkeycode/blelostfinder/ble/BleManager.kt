@@ -26,7 +26,6 @@ class BleManager @Inject constructor(
     companion object {
         private const val TAG = "BleManager"
 
-        // 双击检测时间窗口（毫秒）
         private const val DOUBLE_PRESS_TIMEOUT = 2000L
         private var lastButtonPressTime = 0L
 
@@ -34,19 +33,15 @@ class BleManager @Inject constructor(
         private var lastDoubleClickTime = 0L
         private const val DOUBLE_CLICK_COOLDOWN = 800L
 
-        // iTAG Device Info
         const val I_DEVICE_NAME = "iTAG"
         const val I_DEVICE_MAC = "FF:FF:11:8C:4E:3B"
 
-        // Alert Notification Service
         val ALERT_SERVICE_UUID = UUID.fromString("00001802-0000-1000-8000-00805f9b34fb")
         val ALERT_LEVEL_CHARACTERISTIC_UUID = UUID.fromString("00002a06-0000-1000-8000-00805f9b34fb")
 
-        // Battery Service
         val BATTERY_SERVICE_UUID = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb")
         val BATTERY_LEVEL_CHARACTERISTIC_UUID = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb")
 
-        // Custom Service for Button Press
         val CUSTOM_SERVICE_UUID = UUID.fromString("0000ffe0-0000-1000-8000-00805f9b34fb")
         val CUSTOM_CHARACTERISTIC_UUID = UUID.fromString("0000ffe1-0000-1000-8000-00805f9b34fb")
 
@@ -61,7 +56,6 @@ class BleManager @Inject constructor(
     private var batteryCharacteristic: BluetoothGattCharacteristic? = null
     private var customCharacteristic: BluetoothGattCharacteristic? = null
 
-    // 保存要连接的设备地址，用于断连后重连
     private var deviceMacToConnect: String? = null
 
     private val _connectionState = MutableStateFlow<BleConnectionState>(BleConnectionState.Disconnected)
@@ -73,12 +67,13 @@ class BleManager @Inject constructor(
     private val _batteryLevel = MutableStateFlow(-1)
     val batteryLevel: StateFlow<Int> = _batteryLevel.asStateFlow()
 
-    // 核心修复：replay = 0，避免新订阅者（如过夜后复活的 ViewModel）收到缓存的旧事件
-    // extraBufferCapacity = 0，不缓存任何事件，事件只发给当前活跃订阅者
-    private val _bleEvents = MutableSharedFlow<BleEvent>(replay = 0, extraBufferCapacity = 0)
+    // 核心修复：replay=0 避免过夜后旧事件，extraBufferCapacity=1 确保 tryEmit/emit 有缓冲空间
+    private val _bleEvents = MutableSharedFlow<BleEvent>(replay = 0, extraBufferCapacity = 1)
     val bleEvents: SharedFlow<BleEvent> = _bleEvents.asSharedFlow()
 
-    // Handler 用于延迟重连
+    // 核心修复：使用独立协程作用域调用 emit，确保事件不丢失
+    private val managerScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private val bleCallback = object : BluetoothGattCallback() {
@@ -102,9 +97,10 @@ class BleManager @Inject constructor(
                     rssiPollingJob?.cancel()
                     rssiPollingJob = null
 
-                    mainHandler.post {
+                    // 核心修复：使用 emit 代替 tryEmit，确保事件不丢失
+                    managerScope.launch {
                         try {
-                            _bleEvents.tryEmit(BleEvent.Disconnected)
+                            _bleEvents.emit(BleEvent.Disconnected)
                         } catch (e: Exception) {
                             Log.e(TAG, "发送断连事件失败", e)
                         }
@@ -174,27 +170,26 @@ class BleManager @Inject constructor(
             if (characteristic.uuid == CUSTOM_CHARACTERISTIC_UUID) {
                 val currentTime = System.currentTimeMillis()
 
-                // 核心修复：冷却期检查。如果 800ms 内已经发送过双击事件，忽略本次通知
-                // 这解决了一次物理双击产生 2~3 个 BLE 通知导致重复触发的问题
                 if (currentTime - lastDoubleClickTime < DOUBLE_CLICK_COOLDOWN) {
                     Log.d(TAG, "双击冷却期内，忽略重复通知")
                     return
                 }
 
                 if (currentTime - lastButtonPressTime < DOUBLE_PRESS_TIMEOUT) {
-                    // 检测为双击
                     lastButtonPressTime = 0
                     lastDoubleClickTime = currentTime
-                    mainHandler.post {
+
+                    // 核心修复：使用 emit 代替 tryEmit，确保事件不丢失
+                    managerScope.launch {
                         try {
-                            _bleEvents.tryEmit(BleEvent.DoubleButtonPressed)
+                            _bleEvents.emit(BleEvent.DoubleButtonPressed)
+                            Log.d(TAG, "双击事件已 emit")
                         } catch (e: Exception) {
                             Log.e(TAG, "发送双击事件失败", e)
                         }
                     }
                     Log.d(TAG, "检测到双击事件")
                 } else {
-                    // 单击，记录时间
                     lastButtonPressTime = currentTime
                     Log.d(TAG, "检测到单击事件，等待第二次点击")
                 }
@@ -560,9 +555,10 @@ class BleManager @Inject constructor(
         }
     }
 
-    fun emitAlarmEvent(reason: String) {
+    // 核心修复：使用 suspend emit 代替 tryEmit，确保事件不丢失
+    suspend fun emitAlarmEvent(reason: String) {
         try {
-            _bleEvents.tryEmit(BleEvent.AlarmTriggered(reason))
+            _bleEvents.emit(BleEvent.AlarmTriggered(reason))
         } catch (e: Exception) {
             Log.e(TAG, "发送报警事件失败", e)
         }

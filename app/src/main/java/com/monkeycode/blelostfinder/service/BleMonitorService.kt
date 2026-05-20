@@ -45,8 +45,6 @@ class BleMonitorService : Service() {
         private const val NOTIFICATION_CHANNEL_ID = "ble_monitor_channel"
         private const val NOTIFICATION_ID = 1001
         private const val ACTION_STOP_MONITORING = "com.monkeycode.blelostfinder.STOP_MONITORING"
-
-        // 核心修复：新增外部停止命令，供 ViewModel 点击"好的"时通知 Service 重置状态
         const val ACTION_STOP_PHONE_ALARM = "com.monkeycode.blelostfinder.STOP_PHONE_ALARM"
 
         private const val DEFAULT_RSSI_THRESHOLD = -90
@@ -69,8 +67,6 @@ class BleMonitorService : Service() {
     lateinit var alarmSoundManager: AlarmSoundManager
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-
-    // 核心修复：使用 Mutex 保护报警状态，防止并发事件导致状态竞争和铃声叠加
     private val alarmMutex = Mutex()
 
     private lateinit var notificationManager: NotificationManager
@@ -116,7 +112,6 @@ class BleMonitorService : Service() {
                     stopSelf()
                     return START_NOT_STICKY
                 }
-                // 核心修复：处理 ViewModel 发来的停止命令
                 ACTION_STOP_PHONE_ALARM -> {
                     serviceScope.launch {
                         alarmMutex.withLock {
@@ -126,7 +121,6 @@ class BleMonitorService : Service() {
                             }
                         }
                     }
-                    // 继续执行下面的前台服务启动逻辑，确保服务存活
                 }
             }
 
@@ -441,7 +435,7 @@ class BleMonitorService : Service() {
         }
     }
 
-    // 核心修复：双击事件由 Service 统一串行处理，使用 Mutex 保证原子性
+    // 双击事件由 Service 统一串行处理，使用 Mutex 保证原子性
     private fun handleBleEvent(event: BleEvent) {
         when (event) {
             is BleEvent.ButtonPressed -> {
@@ -474,8 +468,8 @@ class BleMonitorService : Service() {
         Log.d(TAG, "Device disconnected: $deviceMac (location recording disabled)")
     }
 
-    // 核心修复：去掉内部 serviceScope.launch，直接在锁内同步执行
-    // 状态设置和声音播放必须在同一把锁内完成，防止并发覆盖 mediaPlayer
+    // 核心修复：suspend 函数，因为内部调用 settingsManager.alarmRingtonePath.firstOrNull() 是 suspend
+    // 同时调用 bleManager.emitAlarmEvent() 也是 suspend
     private suspend fun triggerPhoneAlarmLocked(reason: String) {
         if (isInDndMode()) {
             Log.d(TAG, "In DND mode, not triggering alarm: $reason")
@@ -489,6 +483,7 @@ class BleMonitorService : Service() {
             alarmSoundManager.stopPlaying()
             val ringtonePath = settingsManager.alarmRingtonePath.firstOrNull()
             alarmSoundManager.playAlarm(ringtonePath)
+            // 核心修复：使用 suspend emitAlarmEvent 代替 tryEmit，确保事件不丢失
             bleManager.emitAlarmEvent(reason)
         } catch (e: Exception) {
             Log.e(TAG, "触发报警失败", e)
@@ -496,14 +491,12 @@ class BleMonitorService : Service() {
         }
     }
 
-    // 锁内版本，供 Mutex 保护的路径调用
     private fun stopAlarmIfPlayingLocked() {
         isAlarmPlaying = false
         bleManager.stopAlarm()
         alarmSoundManager.stopPlaying()
     }
 
-    // 兼容旧调用路径（如 onDestroy、stopMonitoring），异步获取锁
     private fun stopAlarmIfPlaying() {
         serviceScope.launch {
             alarmMutex.withLock {

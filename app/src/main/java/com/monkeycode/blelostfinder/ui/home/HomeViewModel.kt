@@ -40,14 +40,11 @@ class HomeViewModel @Inject constructor(
     val rssi: StateFlow<Int> = bleManager.rssi
     val batteryLevel: StateFlow<Int> = bleManager.batteryLevel
 
-    // 报警按钮状态（手动控制防丢器响铃）
     private val _isDeviceAlarmPlaying = MutableStateFlow(false)
     val isDeviceAlarmPlaying: StateFlow<Boolean> = _isDeviceAlarmPlaying.asStateFlow()
 
-    // 服务运行状态
     val isMonitoringRunning = isRunning
 
-    // 手机报警弹窗触发
     private val _phoneAlarmTriggered = MutableStateFlow(false)
     val phoneAlarmTriggered: StateFlow<Boolean> = _phoneAlarmTriggered.asStateFlow()
 
@@ -57,8 +54,7 @@ class HomeViewModel @Inject constructor(
         observeBleEvents()
         connectToDevice()
 
-        // 核心修复：启动时如果 Service 正在响铃（如过夜后），立即显示弹窗
-        // 因为 replay=0 的 SharedFlow 不会把旧事件发给新订阅者
+        // 启动时如果正在响铃，显示弹窗
         if (alarmSoundManager.isPlaying()) {
             _phoneAlarmTriggered.value = true
             Log.d("HomeViewModel", "启动时检测到正在响铃，显示弹窗")
@@ -94,8 +90,8 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    // 核心修复：双击事件只处理弹窗显示/关闭，不再处理响铃
-    // 响铃统一由 BleMonitorService 处理，解决前后台状态竞争
+    // 核心修复：双击事件只处理弹窗，响铃由 Service 全权负责
+    // 弹窗状态根据实际响铃状态设置，避免和 AlarmTriggered 事件时序竞争
     private fun observeBleEvents() {
         viewModelScope.launch {
             bleManager.bleEvents.collect { event ->
@@ -104,9 +100,12 @@ class HomeViewModel @Inject constructor(
                         Log.d("HomeViewModel", "检测到防丢器单击，忽略")
                     }
                     is BleEvent.DoubleButtonPressed -> {
-                        // 只处理弹窗：响铃由 Service 全权负责
-                        Log.d("HomeViewModel", "检测到防丢器双击，切换弹窗状态")
-                        _phoneAlarmTriggered.value = !_phoneAlarmTriggered.value
+                        // 核心修复：根据实际响铃状态设置弹窗，而不是切换状态
+                        // 这样无论 AlarmTriggered 和 DoubleButtonPressed 谁先谁后，
+                        // 最终弹窗状态都和实际响铃状态一致
+                        val isPlaying = alarmSoundManager.isPlaying()
+                        _phoneAlarmTriggered.value = isPlaying
+                        Log.d("HomeViewModel", "检测到防丢器双击，响铃状态=$isPlaying，弹窗=${isPlaying}")
                     }
                     is BleEvent.AlarmTriggered -> {
                         // Service 触发报警（断连或双击），显示弹窗
@@ -154,8 +153,6 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    // 保留方法：供手动测试或外部调用触发手机报警
-    // 正常流程下，手机报警由 Service 自动处理，ViewModel 不再主动触发
     fun triggerPhoneAlarm() {
         viewModelScope.launch {
             try {
@@ -170,22 +167,17 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    // 核心修复：stopPhoneAlarm 停止弹窗和铃声，同时通知 Service 重置 isAlarmPlaying
-    // 否则 Service 的 isAlarmPlaying 仍为 true，后续断连不会自动报警
     fun stopPhoneAlarm() {
         try {
-            // 停止防丢器响铃（如果手动触发过）
             if (_isDeviceAlarmPlaying.value) {
                 viewModelScope.launch {
                     bleManager.stopAlarm()
                 }
                 _isDeviceAlarmPlaying.value = false
             }
-            // 停止手机铃声
             alarmSoundManager.stopPlaying()
             _phoneAlarmTriggered.value = false
 
-            // 核心修复：发送 Intent 通知 Service 重置报警状态
             val context = getApplication<Application>().applicationContext
             val stopIntent = Intent(context, BleMonitorService::class.java).apply {
                 action = BleMonitorService.ACTION_STOP_PHONE_ALARM

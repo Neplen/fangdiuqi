@@ -46,8 +46,14 @@ class BleManager @Inject constructor(
         val CUSTOM_SERVICE_UUID = UUID.fromString("0000ffe0-0000-1000-8000-00805f9b34fb")
         val CUSTOM_CHARACTERISTIC_UUID = UUID.fromString("0000ffe1-0000-1000-8000-00805f9b34fb")
 
+        // 核心修复：新增断连报警配置特征值（i-Searching 同款）
+        val DISCONNECT_ALARM_CHARACTERISTIC_UUID = UUID.fromString("0000ffe2-0000-1000-8000-00805f9b34fb")
+
         const val ALERT_COMMAND = 0x01.toByte()
         const val ALERT_STOP_COMMAND = 0x00.toByte()
+        // 断连报警配置命令
+        const val DISCONNECT_ALARM_ENABLE = 0x01.toByte()
+        const val DISCONNECT_ALARM_DISABLE = 0x00.toByte()
     }
 
     private var bluetoothAdapter: BluetoothAdapter? = null
@@ -139,6 +145,10 @@ class BleManager @Inject constructor(
                         gatt.writeDescriptor(descriptor)
                     }
                 }
+
+                // 核心修复：发现断连报警配置特征值
+                disconnectAlarmCharacteristic = gatt.getService(CUSTOM_SERVICE_UUID)
+                    ?.getCharacteristic(DISCONNECT_ALARM_CHARACTERISTIC_UUID)
 
                 batteryCharacteristic?.let {
                     gatt.readCharacteristic(it)
@@ -553,6 +563,7 @@ class BleManager @Inject constructor(
             alertCharacteristic = null
             batteryCharacteristic = null
             customCharacteristic = null
+            disconnectAlarmCharacteristic = null
         }
     }
 

@@ -274,12 +274,17 @@ class BleMonitorService : Service() {
                 }
             }
 
-            // 核心修复：监听断连报警开关
+            // 核心修复：监听断连报警开关，变化时立即配置防丢器
             serviceScope.launch {
                 try {
                     settingsManager.isDisconnectAlarmEnabled.collect { enabled ->
                         isDisconnectAlarmEnabled = enabled
                         Log.d(TAG, "断连报警开关: $enabled")
+                        // 核心修复：如果已连接，立即同步配置到防丢器
+                        if (bleManager.connectionState.value is BleConnectionState.Connected) {
+                            bleManager.setDisconnectAlarmEnabled(enabled)
+                            Log.d(TAG, "已实时同步防丢器断连报警配置")
+                        }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "断连报警监听失败", e)
@@ -445,6 +450,10 @@ class BleMonitorService : Service() {
                     alarmTriggerTime = null
                     deviceAlarmRetriggerTime = null
 
+                    // 核心修复：连接成功后立即配置防丢器断连报警行为
+                    bleManager.setDisconnectAlarmEnabled(isDisconnectAlarmEnabled)
+                    Log.d(TAG, "已同步防丢器断连报警配置: $isDisconnectAlarmEnabled")
+
                     if (isAlarmPlaying) {
                         alarmMutex.withLock {
                             stopAlarmIfPlayingLocked()
@@ -593,7 +602,17 @@ class BleMonitorService : Service() {
     }
 
     private fun isWifiConnected(): Boolean {
-        val networkInfo = wifiManager?.connectionInfo
-        return networkInfo?.ssid != null && networkInfo.ssid != "<unknown ssid>"
+        return try {
+            val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) 
+                as? android.net.ConnectivityManager
+            val network = connectivityManager?.activeNetwork
+            val capabilities = connectivityManager?.getNetworkCapabilities(network)
+            val isWifi = capabilities?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true
+            Log.d(TAG, "WiFi 连接状态: $isWifi")
+            isWifi
+        } catch (e: Exception) {
+            Log.e(TAG, "检查 WiFi 状态失败", e)
+            false
+        }
     }
 }

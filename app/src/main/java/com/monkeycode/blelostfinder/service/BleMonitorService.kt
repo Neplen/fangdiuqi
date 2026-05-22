@@ -17,7 +17,6 @@ import com.monkeycode.blelostfinder.ble.BleEvent
 import com.monkeycode.blelostfinder.ble.BleManager
 import com.monkeycode.blelostfinder.data.local.SettingsManager
 import com.monkeycode.blelostfinder.data.model.BleDevice
-import com.monkeycode.blelostfinder.data.model.LocationRecord
 import com.monkeycode.blelostfinder.data.repository.DeviceRepository
 import com.monkeycode.blelostfinder.ui.settings.AlarmSoundManager
 import dagger.hilt.android.AndroidEntryPoint
@@ -29,6 +28,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
@@ -47,7 +47,6 @@ class BleMonitorService : Service() {
         private const val ACTION_STOP_MONITORING = "com.monkeycode.blelostfinder.STOP_MONITORING"
         const val ACTION_STOP_PHONE_ALARM = "com.monkeycode.blelostfinder.STOP_PHONE_ALARM"
 
-        private const val DEFAULT_RSSI_THRESHOLD = -90
         private const val DEFAULT_ALARM_DELAY = 60
 
         private val _isRunning = MutableStateFlow(false)
@@ -80,8 +79,15 @@ class BleMonitorService : Service() {
     private var alarmTriggerTime: Long? = null
     private var isAlarmPlaying = false
     private var isWifiDndActive = false
-    private var currentRssiThreshold = DEFAULT_RSSI_THRESHOLD
     private var currentAlarmDelay = DEFAULT_ALARM_DELAY
+
+    // 核心修复：定时勿扰相关状态
+    private var isScheduleDndEnabled = false
+    private var dndStartTime = "21:00"
+    private var dndEndTime = "08:00"
+
+    // 核心修复：断连自动报警开关
+    private var isDisconnectAlarmEnabled = true
 
     private var deviceAlarmRetriggerTime: Long? = null
     private val DEVICE_ALARM_RETRY_INTERVAL = 30000L
@@ -249,19 +255,17 @@ class BleMonitorService : Service() {
                 try {
                     deviceRepository.getDeviceByMac(deviceMac)?.let { device ->
                         currentDevice = device
-                        currentRssiThreshold = device.rssiThreshold
                         currentAlarmDelay = device.alarmDelaySeconds
-                        Log.d(TAG, "加载设备配置：RSSI 阈值=$currentRssiThreshold, 延迟=$currentAlarmDelay 秒")
+                        Log.d(TAG, "加载设备配置：延迟=$currentAlarmDelay 秒")
                     } ?: run {
                         val defaultDevice = BleDevice(
                             macAddress = deviceMac,
                             name = "iTAG",
-                            rssiThreshold = DEFAULT_RSSI_THRESHOLD,
+                            rssiThreshold = -90,
                             alarmDelaySeconds = DEFAULT_ALARM_DELAY
                         )
                         deviceRepository.insertDevice(defaultDevice)
                         currentDevice = defaultDevice
-                        currentRssiThreshold = DEFAULT_RSSI_THRESHOLD
                         currentAlarmDelay = DEFAULT_ALARM_DELAY
                     }
                     Log.d(TAG, "设备配置已加载")
@@ -270,14 +274,71 @@ class BleMonitorService : Service() {
                 }
             }
 
+            // 核心修复：监听断连报警开关
             serviceScope.launch {
                 try {
-                    settingsManager.isWifiDndEnabled.collect { enabled ->
-                        isWifiDndActive = enabled && isWifiConnected()
-                        Log.d(TAG, "WiFi DND active: $isWifiDndActive")
+                    settingsManager.isDisconnectAlarmEnabled.collect { enabled ->
+                        isDisconnectAlarmEnabled = enabled
+                        Log.d(TAG, "断连报警开关: $enabled")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "断连报警监听失败", e)
+                }
+            }
+
+            // 核心修复：使用 combine 实时合并 WiFi DND 开关和 WiFi 连接状态
+            serviceScope.launch {
+                try {
+                    combine(
+                        settingsManager.isWifiDndEnabled,
+                        kotlinx.coroutines.flow.flow {
+                            while (true) {
+                                emit(isWifiConnected())
+                                delay(5000)  // 每 5 秒检查一次 WiFi 状态
+                            }
+                        }
+                    ) { dndEnabled, wifiConnected ->
+                        dndEnabled && wifiConnected
+                    }.collect { active ->
+                        isWifiDndActive = active
+                        Log.d(TAG, "WiFi DND active: $active")
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "WiFi DND 收集失败", e)
+                }
+            }
+
+            // 核心修复：监听定时勿扰开关和时间
+            serviceScope.launch {
+                try {
+                    settingsManager.isScheduleDndEnabled.collect { enabled ->
+                        isScheduleDndEnabled = enabled
+                        Log.d(TAG, "定时勿扰开关: $enabled")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "定时勿扰开关监听失败", e)
+                }
+            }
+
+            serviceScope.launch {
+                try {
+                    settingsManager.dndStartTime.collect { time ->
+                        dndStartTime = time
+                        Log.d(TAG, "定时勿扰开始时间: $time")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "定时勿扰开始时间监听失败", e)
+                }
+            }
+
+            serviceScope.launch {
+                try {
+                    settingsManager.dndEndTime.collect { time ->
+                        dndEndTime = time
+                        Log.d(TAG, "定时勿扰结束时间: $time")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "定时勿扰结束时间监听失败", e)
                 }
             }
 
@@ -298,19 +359,11 @@ class BleMonitorService : Service() {
                             deviceRepository.getDeviceByMacFlow(deviceMac)
                                 .onEach { device ->
                                     device?.let {
-                                        currentRssiThreshold = it.rssiThreshold
                                         currentAlarmDelay = it.alarmDelaySeconds
-                                        Log.d(TAG, "设置更新：RSSI 阈值=$currentRssiThreshold, 延迟=$currentAlarmDelay 秒")
+                                        Log.d(TAG, "设置更新：延迟=$currentAlarmDelay 秒")
                                     }
                                 }
                                 .launchIn(this)
-                        }
-
-                        launch {
-                            settingsManager.isWifiDndEnabled.collect { enabled ->
-                                isWifiDndActive = enabled && isWifiConnected()
-                                Log.d(TAG, "WiFi DND active: $isWifiDndActive")
-                            }
                         }
                     }
                 } catch (e: Exception) {
@@ -419,8 +472,9 @@ class BleMonitorService : Service() {
                     }
 
                     alarmMutex.withLock {
-                        if (!isAlarmPlaying) {
-                            triggerPhoneAlarmLocked("断连报警")
+                        if (!isAlarmPlaying && isDisconnectAlarmEnabled) {
+                            // 断连自动报警，遵守 DND
+                            triggerPhoneAlarmLocked("断连报警", ignoreDnd = false)
                         }
                     }
                 }
@@ -435,7 +489,6 @@ class BleMonitorService : Service() {
         }
     }
 
-    // 双击事件由 Service 统一串行处理，使用 Mutex 保证原子性
     private fun handleBleEvent(event: BleEvent) {
         when (event) {
             is BleEvent.ButtonPressed -> {
@@ -449,7 +502,8 @@ class BleMonitorService : Service() {
                             stopAlarmIfPlayingLocked()
                         } else {
                             Log.d(TAG, "检测到双击，触发手机报警")
-                            triggerPhoneAlarmLocked("防丢器双击触发")
+                            // 核心修复：手动双击绕过 DND
+                            triggerPhoneAlarmLocked("防丢器双击触发", ignoreDnd = true)
                         }
                     }
                 }
@@ -468,10 +522,9 @@ class BleMonitorService : Service() {
         Log.d(TAG, "Device disconnected: $deviceMac (location recording disabled)")
     }
 
-    // 核心修复：suspend 函数，因为内部调用 settingsManager.alarmRingtonePath.firstOrNull() 是 suspend
-    // 同时调用 bleManager.emitAlarmEvent() 也是 suspend
-    private suspend fun triggerPhoneAlarmLocked(reason: String) {
-        if (isInDndMode()) {
+    // 核心修复：增加 ignoreDnd 参数，手动报警时绕过勿扰
+    private suspend fun triggerPhoneAlarmLocked(reason: String, ignoreDnd: Boolean = false) {
+        if (!ignoreDnd && isInDndMode()) {
             Log.d(TAG, "In DND mode, not triggering alarm: $reason")
             return
         }
@@ -483,7 +536,6 @@ class BleMonitorService : Service() {
             alarmSoundManager.stopPlaying()
             val ringtonePath = settingsManager.alarmRingtonePath.firstOrNull()
             alarmSoundManager.playAlarm(ringtonePath)
-            // 核心修复：使用 suspend emitAlarmEvent 代替 tryEmit，确保事件不丢失
             bleManager.emitAlarmEvent(reason)
         } catch (e: Exception) {
             Log.e(TAG, "触发报警失败", e)
@@ -505,28 +557,39 @@ class BleMonitorService : Service() {
         }
     }
 
+    // 核心修复：isInDndMode 先检查开关，再检查时间段
     private fun isInDndMode(): Boolean {
+        // WiFi DND 检查
         if (isWifiDndActive) {
             Log.d(TAG, "WiFi DND is active")
             return true
         }
 
+        // 定时 DND 检查：先检查开关
+        if (!isScheduleDndEnabled) {
+            return false
+        }
+
         val calendar = Calendar.getInstance()
         val currentTime = calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE)
 
-        val currentDevice = this.currentDevice ?: return false
-
-        val (startHour, startMinute) = currentDevice.dndStartTime.split(":").map { it.toInt() }
-        val (endHour, endMinute) = currentDevice.dndEndTime.split(":").map { it.toInt() }
+        val (startHour, startMinute) = dndStartTime.split(":").map { it.toInt() }
+        val (endHour, endMinute) = dndEndTime.split(":").map { it.toInt() }
 
         val startTime = startHour * 60 + startMinute
         val endTime = endHour * 60 + endMinute
 
-        return if (startTime <= endTime) {
+        val inDnd = if (startTime <= endTime) {
             currentTime in startTime..endTime
         } else {
             currentTime >= startTime || currentTime <= endTime
         }
+
+        if (inDnd) {
+            Log.d(TAG, "定时 DND 生效中: $dndStartTime - $dndEndTime")
+        }
+
+        return inDnd
     }
 
     private fun isWifiConnected(): Boolean {

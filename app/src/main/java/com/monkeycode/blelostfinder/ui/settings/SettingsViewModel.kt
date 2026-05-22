@@ -20,66 +20,66 @@ class SettingsViewModel @Inject constructor(
     application: Application,
     private val settingsManager: SettingsManager
 ) : AndroidViewModel(application) {
-    
-    // 使用 MutableStateFlow 缓存当前值，支持 .value 访问
-    private val _rssiThreshold = MutableStateFlow(-90)
-    val rssiThreshold: StateFlow<Int> = _rssiThreshold.asStateFlow()
-    
+
+    // 核心修复：删除 RSSI 阈值，新增断连报警开关
+    private val _isDisconnectAlarmEnabled = MutableStateFlow(true)
+    val isDisconnectAlarmEnabled: StateFlow<Boolean> = _isDisconnectAlarmEnabled.asStateFlow()
+
     private val _alarmDelay = MutableStateFlow(60)
     val alarmDelay: StateFlow<Int> = _alarmDelay.asStateFlow()
-    
+
     val deviceName: Flow<String> = settingsManager.deviceName
     val isWifiDndEnabled: Flow<Boolean> = settingsManager.isWifiDndEnabled
     val isScheduleDndEnabled: Flow<Boolean> = settingsManager.isScheduleDndEnabled
     val dndStartTime: Flow<String> = settingsManager.dndStartTime
     val dndEndTime: Flow<String> = settingsManager.dndEndTime
-    
+
     init {
-        // 从 DataStore 加载初始值
         viewModelScope.launch {
-            settingsManager.rssiThreshold.collect { _rssiThreshold.value = it }
+            settingsManager.isDisconnectAlarmEnabled.collect { _isDisconnectAlarmEnabled.value = it }
         }
         viewModelScope.launch {
             settingsManager.alarmDelay.collect { _alarmDelay.value = it }
         }
     }
-    
-    fun updateRssiThreshold(threshold: Int) {
+
+    // 核心修复：新增断连报警开关更新
+    fun updateDisconnectAlarmEnabled(enabled: Boolean) {
         viewModelScope.launch {
-            settingsManager.updateRssiThreshold(threshold)
+            settingsManager.updateDisconnectAlarmEnabled(enabled)
         }
     }
-    
+
     fun updateAlarmDelay(seconds: Int) {
         viewModelScope.launch {
             settingsManager.updateAlarmDelay(seconds)
         }
     }
-    
+
     fun updateWifiDndEnabled(enabled: Boolean) {
         viewModelScope.launch {
             settingsManager.updateWifiDndEnabled(enabled)
         }
     }
-    
+
     fun updateScheduleDndEnabled(enabled: Boolean) {
         viewModelScope.launch {
             settingsManager.updateScheduleDndEnabled(enabled)
         }
     }
-    
+
     fun updateDndTime(startTime: String, endTime: String) {
         viewModelScope.launch {
             settingsManager.updateDndTime(startTime, endTime)
         }
     }
-    
+
     fun saveRingtoneUri(uriString: String) {
         viewModelScope.launch {
             settingsManager.updateAlarmRingtonePath(uriString.ifEmpty { null })
         }
     }
-    
+
     fun selectRingtone(type: Int) {
         viewModelScope.launch {
             val path = when (type) {
@@ -91,20 +91,19 @@ class SettingsViewModel @Inject constructor(
             settingsManager.updateAlarmRingtonePath(path)
         }
     }
-    
+
     fun saveRecordingComplete() {
         viewModelScope.launch {
             val path = getCustomRecordingPath()
             settingsManager.updateAlarmRingtonePath(path)
         }
     }
-    
+
     private fun getCustomRecordingPath(): String? {
         val context = getApplication<Application>().applicationContext
-        // 正确路径：/storage/emulated/0/Android/data/com.monkeycode.blelostfinder/files/Music/alarms/alarm_sound.m4a
         val baseDir = context.getExternalFilesDir(null)
         if (baseDir == null) return null
-        
+
         val audioDir = File(baseDir, "Music/alarms")
         val file = File(audioDir, "alarm_sound.m4a")
         return if (file.exists()) file.absolutePath else null

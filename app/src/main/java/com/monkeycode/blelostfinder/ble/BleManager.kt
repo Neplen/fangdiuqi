@@ -82,6 +82,57 @@ class BleManager @Inject constructor(
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    // ==================== 新增：统一决策防丢器断连报警配置 ====================
+
+    /**
+     * 判断当前是否应该开启防丢器的"断连自动报警"功能
+     * 优先级：WiFi勿扰 > 定时勿扰 > 断连自动报警开关
+     */
+    fun shouldEnableDeviceDisconnectAlarm(
+        isWifiDndEnabled: Boolean,
+        isWifiConnected: Boolean,
+        isScheduleDndEnabled: Boolean,
+        isInDndTimeRange: Boolean,
+        isDisconnectAlarmEnabled: Boolean
+    ): Boolean {
+        // 1. WiFi勿扰最高优先级：开启且当前已连接WiFi → 防丢器不报警
+        if (isWifiDndEnabled && isWifiConnected) {
+            Log.d(TAG, "决策结果：WiFi勿扰生效，防丢器断连报警禁用")
+            return false
+        }
+
+        // 2. 定时勿扰：开启且当前处于勿扰时段 → 防丢器不报警
+        if (isScheduleDndEnabled && isInDndTimeRange) {
+            Log.d(TAG, "决策结果：定时勿扰生效，防丢器断连报警禁用")
+            return false
+        }
+
+        // 3. 最后由"断连自动报警"开关决定
+        Log.d(TAG, "决策结果：由断连报警开关决定=$isDisconnectAlarmEnabled")
+        return isDisconnectAlarmEnabled
+    }
+
+    /**
+     * 向防丢器同步当前的断连报警配置
+     * 在设置变化、WiFi变化、时间变化时调用
+     */
+    fun syncDeviceDisconnectAlarmConfig(
+        isWifiDndEnabled: Boolean,
+        isWifiConnected: Boolean,
+        isScheduleDndEnabled: Boolean,
+        isInDndTimeRange: Boolean,
+        isDisconnectAlarmEnabled: Boolean
+    ) {
+        val shouldEnable = shouldEnableDeviceDisconnectAlarm(
+            isWifiDndEnabled,
+            isWifiConnected,
+            isScheduleDndEnabled,
+            isInDndTimeRange,
+            isDisconnectAlarmEnabled
+        )
+        setDisconnectAlarmEnabled(shouldEnable)
+    }
+
     private val bleCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             Log.d(TAG, "Connection state changed: $status, newState: $newState")

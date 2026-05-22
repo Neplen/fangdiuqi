@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -81,12 +82,10 @@ class BleMonitorService : Service() {
     private var isWifiDndActive = false
     private var currentAlarmDelay = DEFAULT_ALARM_DELAY
 
-    // 核心修复：定时勿扰相关状态
     private var isScheduleDndEnabled = false
     private var dndStartTime = "21:00"
     private var dndEndTime = "08:00"
 
-    // 核心修复：断连自动报警开关
     private var isDisconnectAlarmEnabled = true
 
     private var deviceAlarmRetriggerTime: Long? = null
@@ -280,7 +279,6 @@ class BleMonitorService : Service() {
                     settingsManager.isDisconnectAlarmEnabled.collect { enabled ->
                         isDisconnectAlarmEnabled = enabled
                         Log.d(TAG, "断连报警开关: $enabled")
-                        // 核心修复：如果已连接，立即同步配置到防丢器
                         if (bleManager.connectionState.value is BleConnectionState.Connected) {
                             bleManager.setDisconnectAlarmEnabled(enabled)
                             Log.d(TAG, "已实时同步防丢器断连报警配置")
@@ -299,7 +297,7 @@ class BleMonitorService : Service() {
                         kotlinx.coroutines.flow.flow {
                             while (true) {
                                 emit(isWifiConnected())
-                                delay(5000)  // 每 5 秒检查一次 WiFi 状态
+                                delay(5000)
                             }
                         }
                     ) { dndEnabled, wifiConnected ->
@@ -313,7 +311,6 @@ class BleMonitorService : Service() {
                 }
             }
 
-            // 核心修复：监听定时勿扰开关和时间
             serviceScope.launch {
                 try {
                     settingsManager.isScheduleDndEnabled.collect { enabled ->
@@ -482,7 +479,6 @@ class BleMonitorService : Service() {
 
                     alarmMutex.withLock {
                         if (!isAlarmPlaying && isDisconnectAlarmEnabled) {
-                            // 断连自动报警，遵守 DND
                             triggerPhoneAlarmLocked("断连报警", ignoreDnd = false)
                         }
                     }
@@ -511,7 +507,6 @@ class BleMonitorService : Service() {
                             stopAlarmIfPlayingLocked()
                         } else {
                             Log.d(TAG, "检测到双击，触发手机报警")
-                            // 核心修复：手动双击绕过 DND
                             triggerPhoneAlarmLocked("防丢器双击触发", ignoreDnd = true)
                         }
                     }
@@ -531,7 +526,6 @@ class BleMonitorService : Service() {
         Log.d(TAG, "Device disconnected: $deviceMac (location recording disabled)")
     }
 
-    // 核心修复：增加 ignoreDnd 参数，手动报警时绕过勿扰
     private suspend fun triggerPhoneAlarmLocked(reason: String, ignoreDnd: Boolean = false) {
         if (!ignoreDnd && isInDndMode()) {
             Log.d(TAG, "In DND mode, not triggering alarm: $reason")
@@ -566,15 +560,12 @@ class BleMonitorService : Service() {
         }
     }
 
-    // 核心修复：isInDndMode 先检查开关，再检查时间段
     private fun isInDndMode(): Boolean {
-        // WiFi DND 检查
         if (isWifiDndActive) {
             Log.d(TAG, "WiFi DND is active")
             return true
         }
 
-        // 定时 DND 检查：先检查开关
         if (!isScheduleDndEnabled) {
             return false
         }

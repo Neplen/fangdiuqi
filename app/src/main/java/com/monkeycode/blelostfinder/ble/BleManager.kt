@@ -62,6 +62,7 @@ class BleManager @Inject constructor(
     private var alertCharacteristic: BluetoothGattCharacteristic? = null
     private var batteryCharacteristic: BluetoothGattCharacteristic? = null
     private var customCharacteristic: BluetoothGattCharacteristic? = null
+    private var disconnectAlarmCharacteristic: BluetoothGattCharacteristic? = null
 
     private var deviceMacToConnect: String? = null
 
@@ -74,11 +75,9 @@ class BleManager @Inject constructor(
     private val _batteryLevel = MutableStateFlow(-1)
     val batteryLevel: StateFlow<Int> = _batteryLevel.asStateFlow()
 
-    // replay=0 避免过夜后旧事件，extraBufferCapacity=1 提供缓冲
     private val _bleEvents = MutableSharedFlow<BleEvent>(replay = 0, extraBufferCapacity = 1)
     val bleEvents: SharedFlow<BleEvent> = _bleEvents.asSharedFlow()
 
-    // 核心修复：使用 CoroutineScope(Dispatchers.Main + SupervisorJob()) 正确构造协程作用域
     private val managerScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -100,11 +99,11 @@ class BleManager @Inject constructor(
                     alertCharacteristic = null
                     batteryCharacteristic = null
                     customCharacteristic = null
+                    disconnectAlarmCharacteristic = null
 
                     rssiPollingJob?.cancel()
                     rssiPollingJob = null
 
-                    // 核心修复：使用 managerScope.launch + emit，确保事件不丢失
                     managerScope.launch {
                         try {
                             _bleEvents.emit(BleEvent.Disconnected)
@@ -149,6 +148,7 @@ class BleManager @Inject constructor(
                 // 核心修复：发现断连报警配置特征值
                 disconnectAlarmCharacteristic = gatt.getService(CUSTOM_SERVICE_UUID)
                     ?.getCharacteristic(DISCONNECT_ALARM_CHARACTERISTIC_UUID)
+                Log.d(TAG, "断连报警特征值: ${disconnectAlarmCharacteristic != null}")
 
                 batteryCharacteristic?.let {
                     gatt.readCharacteristic(it)
@@ -190,7 +190,6 @@ class BleManager @Inject constructor(
                     lastButtonPressTime = 0
                     lastDoubleClickTime = currentTime
 
-                    // 核心修复：使用 managerScope.launch + emit，确保事件不丢失
                     managerScope.launch {
                         try {
                             _bleEvents.emit(BleEvent.DoubleButtonPressed)
@@ -465,6 +464,26 @@ class BleManager @Inject constructor(
         }
     }
 
+    // 核心修复：配置防丢器断连报警行为（i-Searching 同款实现）
+    @SuppressLint("MissingPermission")
+    fun setDisconnectAlarmEnabled(enabled: Boolean) {
+        try {
+            disconnectAlarmCharacteristic?.let { characteristic ->
+                bluetoothGatt?.writeCharacteristic(
+                    characteristic.apply {
+                        value = if (enabled) byteArrayOf(DISCONNECT_ALARM_ENABLE) else byteArrayOf(DISCONNECT_ALARM_DISABLE)
+                        writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                    }
+                )
+                Log.d(TAG, "已设置防丢器断连报警: $enabled")
+            } ?: run {
+                Log.w(TAG, "断连报警特征值未找到，无法配置")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "配置断连报警失败", e)
+        }
+    }
+
     @SuppressLint("MissingPermission")
     suspend fun readBatteryLevel(): Int? {
         return try {
@@ -567,7 +586,6 @@ class BleManager @Inject constructor(
         }
     }
 
-    // 核心修复：suspend 函数，使用 emit 代替 tryEmit
     suspend fun emitAlarmEvent(reason: String) {
         try {
             _bleEvents.emit(BleEvent.AlarmTriggered(reason))

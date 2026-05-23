@@ -64,6 +64,10 @@ class BleManager @Inject constructor(
     private var customCharacteristic: BluetoothGattCharacteristic? = null
     private var disconnectAlarmCharacteristic: BluetoothGattCharacteristic? = null
 
+    // ==================== 核心修复：缓存待写入的断连报警配置 ====================
+    // 当 FFE2 特征值尚未发现时，先缓存状态，等服务发现完成后自动写入
+    private var pendingDisconnectAlarmState: Boolean? = null
+
     private var deviceMacToConnect: String? = null
 
     private val _connectionState = MutableStateFlow<BleConnectionState>(BleConnectionState.Disconnected)
@@ -151,6 +155,7 @@ class BleManager @Inject constructor(
                     batteryCharacteristic = null
                     customCharacteristic = null
                     disconnectAlarmCharacteristic = null
+                    pendingDisconnectAlarmState = null  // 断连后清除缓存
 
                     rssiPollingJob?.cancel()
                     rssiPollingJob = null
@@ -200,6 +205,12 @@ class BleManager @Inject constructor(
                 disconnectAlarmCharacteristic = gatt.getService(CUSTOM_SERVICE_UUID)
                     ?.getCharacteristic(DISCONNECT_ALARM_CHARACTERISTIC_UUID)
                 Log.d(TAG, "断连报警特征值: ${disconnectAlarmCharacteristic != null}")
+
+                // ==================== 核心修复：服务发现完成后，写入缓存的断连报警配置 ====================
+                pendingDisconnectAlarmState?.let { pending ->
+                    Log.d(TAG, "服务发现完成，写入缓存的断连报警配置: $pending")
+                    setDisconnectAlarmEnabled(pending)
+                }
 
                 batteryCharacteristic?.let {
                     gatt.readCharacteristic(it)
@@ -526,9 +537,12 @@ class BleManager @Inject constructor(
                         writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
                     }
                 )
+                pendingDisconnectAlarmState = null  // 写入成功，清除缓存
                 Log.d(TAG, "已设置防丢器断连报警: $enabled")
             } ?: run {
-                Log.w(TAG, "断连报警特征值未找到，无法配置")
+                // 特征值未就绪，缓存状态，等服务发现后自动写入
+                pendingDisconnectAlarmState = enabled
+                Log.w(TAG, "断连报警特征值未找到，已缓存状态: $enabled")
             }
         } catch (e: Exception) {
             Log.e(TAG, "配置断连报警失败", e)
@@ -634,6 +648,7 @@ class BleManager @Inject constructor(
             batteryCharacteristic = null
             customCharacteristic = null
             disconnectAlarmCharacteristic = null
+            pendingDisconnectAlarmState = null
         }
     }
 

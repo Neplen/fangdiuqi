@@ -64,8 +64,15 @@ class BleManager @Inject constructor(
     private var customCharacteristic: BluetoothGattCharacteristic? = null
     private var disconnectAlarmCharacteristic: BluetoothGattCharacteristic? = null
 
-    // ==================== 核心修复：缓存待写入的断连报警配置 ====================
-    // 当 FFE2 特征值尚未发现时，先缓存状态，等服务发现完成后自动写入
+    // ==================== 核心修复：BLE写入队列，防止命令冲突丢失 ====================
+    private data class WriteRequest(
+        val characteristic: BluetoothGattCharacteristic,
+        val value: ByteArray
+    )
+    private val writeQueue = mutableListOf<WriteRequest>()
+    private var isWriting = false
+
+    // 核心修复：缓存待写入的断连报警配置
     private var pendingDisconnectAlarmState: Boolean? = null
 
     private var deviceMacToConnect: String? = null
@@ -137,6 +144,39 @@ class BleManager @Inject constructor(
         setDisconnectAlarmEnabled(shouldEnable)
     }
 
+    // ==================== 核心修复：BLE写入队列管理 ====================
+    private fun queueWrite(characteristic: BluetoothGattCharacteristic, value: ByteArray) {
+        writeQueue.add(WriteRequest(characteristic, value))
+        if (!isWriting) {
+            processWriteQueue()
+        }
+    }
+
+    private fun processWriteQueue() {
+        if (writeQueue.isEmpty()) {
+            isWriting = false
+            return
+        }
+        val gatt = bluetoothGatt
+        if (gatt == null || _connectionState.value !is BleConnectionState.Connected) {
+            Log.w(TAG, "GATT未连接，清空写入队列(${writeQueue.size}个)")
+            writeQueue.clear()
+            isWriting = false
+            return
+        }
+        isWriting = true
+        val request = writeQueue.removeAt(0)
+        request.characteristic.value = request.value
+        request.characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+        val success = gatt.writeCharacteristic(request.characteristic)
+        if (!success) {
+            Log.e(TAG, "writeCharacteristic返回false，1ms后重试下一个")
+            mainHandler.postDelayed({ processWriteQueue() }, 1)
+        } else {
+            Log.d(TAG, "已发送写入请求: ${request.characteristic.uuid}, 队列剩余: ${writeQueue.size}")
+        }
+    }
+
     private val bleCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             Log.d(TAG, "Connection state changed: $status, newState: $newState")
@@ -155,7 +195,10 @@ class BleManager @Inject constructor(
                     batteryCharacteristic = null
                     customCharacteristic = null
                     disconnectAlarmCharacteristic = null
-                    pendingDisconnectAlarmState = null  // 断连后清除缓存
+                    pendingDisconnectAlarmState = null
+                    // 断连后清空写入队列
+                    writeQueue.clear()
+                    isWriting = false
 
                     rssiPollingJob?.cancel()
                     rssiPollingJob = null
@@ -206,7 +249,7 @@ class BleManager @Inject constructor(
                     ?.getCharacteristic(DISCONNECT_ALARM_CHARACTERISTIC_UUID)
                 Log.d(TAG, "断连报警特征值: ${disconnectAlarmCharacteristic != null}")
 
-                // ==================== 核心修复：服务发现完成后，写入缓存的断连报警配置 ====================
+                // 核心修复：服务发现完成后，写入缓存的断连报警配置
                 pendingDisconnectAlarmState?.let { pending ->
                     Log.d(TAG, "服务发现完成，写入缓存的断连报警配置: $pending")
                     setDisconnectAlarmEnabled(pending)
@@ -236,6 +279,18 @@ class BleManager @Inject constructor(
 
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
             onCharacteristicValueChanged(characteristic, value)
+        }
+
+        // ==================== 核心修复：写入完成回调，继续处理队列 ====================
+        @Deprecated("Deprecated in API 33")
+        override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+            Log.d(TAG, "Characteristic write complete(legacy): ${characteristic.uuid}, status: $status")
+            processWriteQueue()
+        }
+
+        override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
+            Log.d(TAG, "Characteristic write complete: ${characteristic.uuid}, status: $status")
+            processWriteQueue()
         }
 
         private fun onCharacteristicValueChanged(characteristic: BluetoothGattCharacteristic, value: ByteArray) {
@@ -488,64 +543,37 @@ class BleManager @Inject constructor(
         }
     }
 
+    // ==================== 核心修复：使用写入队列，避免BLE命令冲突 ====================
     @SuppressLint("MissingPermission")
     fun startAlarm() {
-        try {
-            alertCharacteristic?.let { characteristic ->
-                try {
-                    bluetoothGatt?.writeCharacteristic(
-                        characteristic.apply {
-                            value = byteArrayOf(ALERT_COMMAND)
-                            writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                        }
-                    )
-                    Log.d(TAG, "Alarm started")
-                } catch (e: Exception) {
-                    Log.e(TAG, "startAlarm 写入特征值失败", e)
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "startAlarm 方法异常", e)
-        }
+        alertCharacteristic?.let { characteristic ->
+            queueWrite(characteristic, byteArrayOf(ALERT_COMMAND))
+            Log.d(TAG, "Alarm start 已加入写入队列")
+        } ?: Log.w(TAG, "报警特征值未找到，无法启动报警")
     }
 
     @SuppressLint("MissingPermission")
     fun stopAlarm() {
-        try {
-            alertCharacteristic?.let { characteristic ->
-                bluetoothGatt?.writeCharacteristic(
-                    characteristic.apply {
-                        value = byteArrayOf(ALERT_STOP_COMMAND)
-                        writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                    }
-                )
-                Log.d(TAG, "Alarm stopped")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "stopAlarm 失败", e)
-        }
+        alertCharacteristic?.let { characteristic ->
+            queueWrite(characteristic, byteArrayOf(ALERT_STOP_COMMAND))
+            Log.d(TAG, "Alarm stop 已加入写入队列")
+        } ?: Log.w(TAG, "报警特征值未找到，无法停止报警")
     }
 
-    // 核心修复：配置防丢器断连报警行为（i-Searching 同款实现）
+    // 核心修复：配置防丢器断连报警行为（使用写入队列）
     @SuppressLint("MissingPermission")
     fun setDisconnectAlarmEnabled(enabled: Boolean) {
-        try {
-            disconnectAlarmCharacteristic?.let { characteristic ->
-                bluetoothGatt?.writeCharacteristic(
-                    characteristic.apply {
-                        value = if (enabled) byteArrayOf(DISCONNECT_ALARM_ENABLE) else byteArrayOf(DISCONNECT_ALARM_DISABLE)
-                        writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-                    }
-                )
-                pendingDisconnectAlarmState = null  // 写入成功，清除缓存
-                Log.d(TAG, "已设置防丢器断连报警: $enabled")
-            } ?: run {
-                // 特征值未就绪，缓存状态，等服务发现后自动写入
-                pendingDisconnectAlarmState = enabled
-                Log.w(TAG, "断连报警特征值未找到，已缓存状态: $enabled")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "配置断连报警失败", e)
+        disconnectAlarmCharacteristic?.let { characteristic ->
+            queueWrite(
+                characteristic,
+                if (enabled) byteArrayOf(DISCONNECT_ALARM_ENABLE) else byteArrayOf(DISCONNECT_ALARM_DISABLE)
+            )
+            pendingDisconnectAlarmState = null
+            Log.d(TAG, "断连报警配置已加入写入队列: $enabled")
+        } ?: run {
+            // 特征值未就绪，缓存状态，等服务发现后自动写入
+            pendingDisconnectAlarmState = enabled
+            Log.w(TAG, "FFE2未就绪，已缓存断连报警状态: $enabled")
         }
     }
 
@@ -649,6 +677,8 @@ class BleManager @Inject constructor(
             customCharacteristic = null
             disconnectAlarmCharacteristic = null
             pendingDisconnectAlarmState = null
+            writeQueue.clear()
+            isWriting = false
         }
     }
 

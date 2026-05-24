@@ -101,10 +101,13 @@ class BleMonitorService : Service() {
     private var cachedScheduleDndEnabled = false
     private var cachedDisconnectAlarmEnabled = true
     private var cachedIsWifiConnected = false
-    private var lastDndRangeState = false  // 上一次定时勿扰时段状态
-    private var lastWifiDndActiveState = false  // 上一次WiFi勿扰生效状态
-    private var lastShouldTriggerPhoneAlarm = false  // 上一次手机报警决策结果
-    private var bluetoothDisconnectedTime: Long? = null  // 蓝牙断连时间戳
+    private var lastDndRangeState = false
+    private var lastWifiDndActiveState = false
+    private var lastShouldTriggerPhoneAlarm = false
+    private var bluetoothDisconnectedTime: Long? = null
+
+    // ==================== 核心修复：记录上次实际同步给防丢器的配置，避免重复写入 ====================
+    private var lastSyncedDisconnectAlarmState: Boolean? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -251,7 +254,7 @@ class BleMonitorService : Service() {
         wifiLock = null
     }
 
-    // ==================== 新增：统一同步防丢器断连报警配置 ====================
+    // ==================== 核心修复：统一同步防丢器断连报警配置（增加去重） ====================
     /**
      * 根据当前所有策略状态，计算是否应该开启防丢器断连报警，并同步给防丢器
      * 在连接状态下，任何策略变化时都应调用此方法
@@ -271,17 +274,19 @@ class BleMonitorService : Service() {
             isDisconnectAlarmEnabled = cachedDisconnectAlarmEnabled
         )
 
+        // 核心修复：去重，状态没变不重复写入，避免占满BLE队列影响手动操作
+        if (shouldEnable == lastSyncedDisconnectAlarmState) {
+            Log.d(TAG, "防丢器断连报警状态未变化($shouldEnable)，跳过重复同步")
+            return
+        }
+
         bleManager.setDisconnectAlarmEnabled(shouldEnable)
+        lastSyncedDisconnectAlarmState = shouldEnable
         Log.d(TAG, "已同步防丢器断连报警配置: $shouldEnable (WiFi勿扰=$cachedWifiDndEnabled, WiFi连接=$cachedIsWifiConnected, 定时勿扰=$cachedScheduleDndEnabled, 在时段内=$isInDndRange, 断连开关=$cachedDisconnectAlarmEnabled)")
     }
 
     // ==================== 核心修复：检查是否需要补偿报警 ====================
-    /**
-     * 当策略条件变化时（WiFi勿扰失效、定时勿扰时段结束），如果蓝牙已经断连且之前被抑制，
-     * 现在条件允许了，立即补报一次手机铃声
-     */
     private fun checkCompensateAlarm() {
-        // 只在蓝牙已断连且当前未报警的情况下检查
         if (bleManager.connectionState.value is BleConnectionState.Connected) {
             return
         }
@@ -292,7 +297,6 @@ class BleMonitorService : Service() {
         val currentShouldTrigger = shouldTriggerPhoneAlarm()
         Log.d(TAG, "补偿报警检查: 之前=$lastShouldTriggerPhoneAlarm, 现在=$currentShouldTrigger, 蓝牙断连时间=$bluetoothDisconnectedTime")
 
-        // 如果之前不允许报警（被抑制），现在允许了，且蓝牙已经断连过 → 补偿报警
         if (!lastShouldTriggerPhoneAlarm && currentShouldTrigger && bluetoothDisconnectedTime != null) {
             serviceScope.launch {
                 alarmMutex.withLock {
@@ -339,7 +343,6 @@ class BleMonitorService : Service() {
                 }
             }
 
-            // ==================== 核心修复：监听断连报警开关，变化时立即配置防丢器 ====================
             serviceScope.launch {
                 try {
                     settingsManager.isDisconnectAlarmEnabled.collect { enabled ->
@@ -354,7 +357,6 @@ class BleMonitorService : Service() {
                 }
             }
 
-            // ==================== 核心修复：使用 combine 实时合并 WiFi DND 开关和 WiFi 连接状态 ====================
             serviceScope.launch {
                 try {
                     combine(
@@ -373,9 +375,7 @@ class BleMonitorService : Service() {
                     }.collect { active ->
                         isWifiDndActive = active
                         Log.d(TAG, "WiFi DND active: $active")
-                        // WiFi勿扰状态变化时，实时同步给防丢器
                         syncDeviceAlarmConfig()
-                        // 检查是否需要补偿报警
                         checkCompensateAlarm()
                     }
                 } catch (e: Exception) {
@@ -383,7 +383,6 @@ class BleMonitorService : Service() {
                 }
             }
 
-            // ==================== 核心修复：监听定时勿扰开关，变化时同步给防丢器 ====================
             serviceScope.launch {
                 try {
                     settingsManager.isScheduleDndEnabled.collect { enabled ->
@@ -420,11 +419,10 @@ class BleMonitorService : Service() {
                 }
             }
 
-            // ==================== 核心修复：每分钟检查定时勿扰时段变化，状态翻转时同步给防丢器 ====================
             serviceScope.launch {
                 try {
                     while (isMonitoring) {
-                        delay(60000) // 每分钟检查一次
+                        delay(60000)
 
                         if (bleManager.connectionState.value is BleConnectionState.Connected) {
                             val currentlyInRange = isInDndTimeRange()
@@ -434,7 +432,6 @@ class BleMonitorService : Service() {
                                 syncDeviceAlarmConfig()
                             }
                         }
-                        // 即使蓝牙已断连，也要检查补偿报警
                         checkCompensateAlarm()
                     }
                 } catch (e: Exception) {
@@ -544,10 +541,11 @@ class BleMonitorService : Service() {
                     Log.d(TAG, "Connected to device，连接成功")
                     alarmTriggerTime = null
                     deviceAlarmRetriggerTime = null
-                    bluetoothDisconnectedTime = null  // 连接成功，清除断连时间
-                    lastShouldTriggerPhoneAlarm = false  // 重置补偿报警状态
+                    bluetoothDisconnectedTime = null
+                    lastShouldTriggerPhoneAlarm = false
 
-                    // ==================== 核心修复：连接成功后立即按当前完整策略配置防丢器 ====================
+                    // 核心修复：连接成功后强制重置同步状态，确保FFE2配置一定会被写入
+                    lastSyncedDisconnectAlarmState = null
                     syncDeviceAlarmConfig()
 
                     if (isAlarmPlaying) {
@@ -576,11 +574,9 @@ class BleMonitorService : Service() {
                         ))
                     }
 
-                    // ==================== 核心修复：记录蓝牙断连时间，用于后续补偿报警 ====================
                     bluetoothDisconnectedTime = System.currentTimeMillis()
                     lastShouldTriggerPhoneAlarm = shouldTriggerPhoneAlarm()
 
-                    // ==================== 核心修复：断连时按完整优先级判断手机是否报警 ====================
                     alarmMutex.withLock {
                         if (!isAlarmPlaying && shouldTriggerPhoneAlarm()) {
                             triggerPhoneAlarmLocked("断连报警", ignoreDnd = false)
@@ -598,25 +594,17 @@ class BleMonitorService : Service() {
         }
     }
 
-    // ==================== 新增：按完整优先级判断手机是否应该报警 ====================
-    /**
-     * 判断手机端是否应该触发断连报警
-     * 优先级：WiFi勿扰 > 定时勿扰 > 断连自动报警开关
-     */
     private fun shouldTriggerPhoneAlarm(): Boolean {
-        // 1. WiFi勿扰最高优先级
         if (cachedWifiDndEnabled && cachedIsWifiConnected) {
             Log.d(TAG, "手机报警判断：WiFi勿扰生效，不报警")
             return false
         }
 
-        // 2. 定时勿扰
         if (cachedScheduleDndEnabled && isInDndTimeRange()) {
             Log.d(TAG, "手机报警判断：定时勿扰生效，不报警")
             return false
         }
 
-        // 3. 断连自动报警开关
         Log.d(TAG, "手机报警判断：由断连报警开关决定=$cachedDisconnectAlarmEnabled")
         return cachedDisconnectAlarmEnabled
     }
@@ -687,9 +675,7 @@ class BleMonitorService : Service() {
         }
     }
 
-    // ==================== 修改：isInDndMode 现在只用于双击报警等"手动触发"场景 ====================
     private fun isInDndMode(): Boolean {
-        // 手动触发（如双击报警）不受断连报警开关影响，但仍受勿扰影响
         if (isWifiDndActive) {
             Log.d(TAG, "WiFi DND is active")
             return true
@@ -702,7 +688,6 @@ class BleMonitorService : Service() {
         return isInDndTimeRange()
     }
 
-    // ==================== 新增：单独判断是否在定时勿扰时段内 ====================
     private fun isInDndTimeRange(): Boolean {
         if (!isScheduleDndEnabled) return false
 

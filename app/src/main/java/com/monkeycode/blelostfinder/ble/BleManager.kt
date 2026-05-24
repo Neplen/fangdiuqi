@@ -281,8 +281,9 @@ class BleManager @Inject constructor(
             onCharacteristicValueChanged(characteristic, value)
         }
 
-        // ==================== 核心修复：写入完成回调，继续处理队列 ====================
+        // ==================== 核心修复：写入完成回调（兼容新旧API），继续处理队列 ====================
         @Deprecated("Deprecated in API 33")
+        @Suppress("DEPRECATION")
         override fun onCharacteristicWrite(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
             Log.d(TAG, "Characteristic write complete(legacy): ${characteristic.uuid}, status: $status")
             processWriteQueue()

@@ -67,8 +67,7 @@ class ScanViewModel @Inject constructor(
                 val device = BleDevice(
                     macAddress = scanResult.macAddress,
                     name = scanResult.name ?: "BLE Device",
-                    rssiThreshold = -90,
-                    alarmDelaySeconds = 60
+                    rssiThreshold = -90
                 )
                 deviceRepository.insertDevice(device)
 

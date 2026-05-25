@@ -10,7 +10,7 @@ import com.monkeycode.blelostfinder.data.model.LocationRecord
 
 @Database(
     entities = [BleDevice::class, LocationRecord::class],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -28,7 +28,10 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "ble_lost_finder_database"
-                ).build()
+                )
+                // 版本1→2删除了 alarmDelaySeconds 字段，使用破坏性迁移重建数据库
+                .fallbackToDestructiveMigration()
+                .build()
                 INSTANCE = instance
                 instance
             }

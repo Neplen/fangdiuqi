@@ -21,12 +21,9 @@ class SettingsViewModel @Inject constructor(
     private val settingsManager: SettingsManager
 ) : AndroidViewModel(application) {
 
-    // 核心修复：删除 RSSI 阈值，新增断连报警开关
+    // 断连报警开关
     private val _isDisconnectAlarmEnabled = MutableStateFlow(true)
     val isDisconnectAlarmEnabled: StateFlow<Boolean> = _isDisconnectAlarmEnabled.asStateFlow()
-
-    private val _alarmDelay = MutableStateFlow(60)
-    val alarmDelay: StateFlow<Int> = _alarmDelay.asStateFlow()
 
     val deviceName: Flow<String> = settingsManager.deviceName
     val isWifiDndEnabled: Flow<Boolean> = settingsManager.isWifiDndEnabled
@@ -38,21 +35,12 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             settingsManager.isDisconnectAlarmEnabled.collect { _isDisconnectAlarmEnabled.value = it }
         }
-        viewModelScope.launch {
-            settingsManager.alarmDelay.collect { _alarmDelay.value = it }
-        }
     }
 
-    // 核心修复：新增断连报警开关更新
+    // 断连报警开关更新
     fun updateDisconnectAlarmEnabled(enabled: Boolean) {
         viewModelScope.launch {
             settingsManager.updateDisconnectAlarmEnabled(enabled)
-        }
-    }
-
-    fun updateAlarmDelay(seconds: Int) {
-        viewModelScope.launch {
-            settingsManager.updateAlarmDelay(seconds)
         }
     }
 

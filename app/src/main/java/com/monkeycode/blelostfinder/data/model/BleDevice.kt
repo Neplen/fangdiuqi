@@ -9,7 +9,6 @@ data class BleDevice(
     val macAddress: String,
     val name: String = "iTAG",
     val rssiThreshold: Int = -90,
-    val alarmDelaySeconds: Int = 60,
     val alarmRingtonePath: String? = null,
     val isWifiDndEnabled: Boolean = true,
     val isScheduleDndEnabled: Boolean = true,

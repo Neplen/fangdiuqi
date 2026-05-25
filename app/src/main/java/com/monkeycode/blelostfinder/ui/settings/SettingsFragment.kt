@@ -80,16 +80,10 @@ class SettingsFragment : Fragment() {
                     }
                 }
 
-                // 核心修复：监听断连报警开关
+                // 监听断连报警开关
                 launch {
                     viewModel.isDisconnectAlarmEnabled.collect { enabled ->
                         binding.switchDisconnectAlarm.isChecked = enabled
-                    }
-                }
-
-                launch {
-                    viewModel.alarmDelay.collect { delay ->
-                        binding.tvAlarmDelay.text = "$delay 秒"
                     }
                 }
 
@@ -121,23 +115,9 @@ class SettingsFragment : Fragment() {
     }
 
     private fun setupClickListeners() {
-        // 核心修复：断连报警开关
+        // 断连报警开关
         binding.switchDisconnectAlarm.setOnCheckedChangeListener { _, isChecked ->
             viewModel.updateDisconnectAlarmEnabled(isChecked)
-        }
-
-        // 报警延迟输入弹窗
-        binding.btnSetAlarmDelay.setOnClickListener {
-            showNumberPickerDialog(
-                title = "设置报警延迟",
-                initialValue = viewModel.alarmDelay.value,
-                minValue = 10,
-                maxValue = 300,
-                unit = " 秒",
-                onConfirm = { value ->
-                    viewModel.updateAlarmDelay(value)
-                }
-            )
         }
 
         binding.switchWifiDnd.setOnCheckedChangeListener { _, isChecked ->
@@ -197,52 +177,6 @@ class SettingsFragment : Fragment() {
         }
 
         timePicker.show(requireActivity().supportFragmentManager, "time_picker")
-    }
-
-    private fun showNumberPickerDialog(
-        title: String,
-        initialValue: Int,
-        minValue: Int,
-        maxValue: Int,
-        unit: String,
-        onConfirm: (Int) -> Unit
-    ) {
-        val editText = android.widget.EditText(requireContext()).apply {
-            setText(initialValue.toString())
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER or 
-                       android.text.InputType.TYPE_NUMBER_FLAG_SIGNED
-            setPadding(48, 16, 48, 16)
-            setHint("范围：$minValue ~ $maxValue$unit")
-        }
-
-        val dialog = MaterialAlertDialogBuilder(requireContext())
-            .setTitle(title)
-            .setView(editText)
-            .setPositiveButton("确定") { _, _ ->
-                val text = editText.text.toString()
-                if (text.isNotEmpty()) {
-                    var value = text.toIntOrNull() ?: initialValue
-                    value = value.coerceIn(minValue, maxValue)
-                    onConfirm(value)
-                }
-            }
-            .setNegativeButton("取消", null)
-            .setNeutralButton("重置") { _, _ ->
-                val newValue = when (title) {
-                    "设置报警延迟" -> 60
-                    else -> initialValue
-                }
-                editText.setText(newValue.toString())
-            }
-            .show()
-
-        dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_NEUTRAL)?.setOnClickListener {
-            val newValue = when (title) {
-                "设置报警延迟" -> 60
-                else -> initialValue
-            }
-            editText.setText(newValue.toString())
-        }
     }
 
     private fun showRingtonePicker() {

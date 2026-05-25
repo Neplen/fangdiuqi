@@ -48,7 +48,8 @@ class BleMonitorService : Service() {
         private const val ACTION_STOP_MONITORING = "com.monkeycode.blelostfinder.STOP_MONITORING"
         const val ACTION_STOP_PHONE_ALARM = "com.monkeycode.blelostfinder.STOP_PHONE_ALARM"
 
-        private const val DEFAULT_ALARM_DELAY = 60
+        // 固定6秒延迟，与防丢器固件同步
+        private const val DISCONNECT_ALARM_DELAY_MS = 6000L
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
@@ -80,7 +81,6 @@ class BleMonitorService : Service() {
     private var alarmTriggerTime: Long? = null
     private var isAlarmPlaying = false
     private var isWifiDndActive = false
-    private var currentAlarmDelay = DEFAULT_ALARM_DELAY
 
     private var isScheduleDndEnabled = false
     private var dndStartTime = "21:00"
@@ -96,7 +96,7 @@ class BleMonitorService : Service() {
     private var heartbeatJob: kotlinx.coroutines.Job? = null
     private val HEARTBEAT_INTERVAL = 60000L
 
-    // ==================== 新增：缓存各开关状态，用于统一决策 ====================
+    // 新增：缓存各开关状态，用于统一决策
     private var cachedWifiDndEnabled = false
     private var cachedScheduleDndEnabled = false
     private var cachedDisconnectAlarmEnabled = true
@@ -106,8 +106,11 @@ class BleMonitorService : Service() {
     private var lastShouldTriggerPhoneAlarm = false
     private var bluetoothDisconnectedTime: Long? = null
 
-    // ==================== 核心修复：记录上次实际同步给防丢器的配置，避免重复写入 ====================
+    // 核心修复：记录上次实际同步给防丢器的配置，避免重复写入
     private var lastSyncedDisconnectAlarmState: Boolean? = null
+
+    // 新增：断连后延迟报警的协程任务
+    private var pendingAlarmJob: kotlinx.coroutines.Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -170,6 +173,8 @@ class BleMonitorService : Service() {
         releaseWakeLock()
         heartbeatJob?.cancel()
         heartbeatJob = null
+        pendingAlarmJob?.cancel()
+        pendingAlarmJob = null
         serviceScope.cancel()
         _isRunning.value = false
         super.onDestroy()
@@ -254,7 +259,6 @@ class BleMonitorService : Service() {
         wifiLock = null
     }
 
-    // ==================== 核心修复：统一同步防丢器断连报警配置（增加去重） ====================
     /**
      * 根据当前所有策略状态，计算是否应该开启防丢器断连报警，并同步给防丢器
      * 在连接状态下，任何策略变化时都应调用此方法
@@ -274,7 +278,7 @@ class BleMonitorService : Service() {
             isDisconnectAlarmEnabled = cachedDisconnectAlarmEnabled
         )
 
-        // 核心修复：去重，状态没变不重复写入，避免占满BLE队列影响手动操作
+        // 去重，状态没变不重复写入，避免占满BLE队列影响手动操作
         if (shouldEnable == lastSyncedDisconnectAlarmState) {
             Log.d(TAG, "防丢器断连报警状态未变化($shouldEnable)，跳过重复同步")
             return
@@ -285,7 +289,7 @@ class BleMonitorService : Service() {
         Log.d(TAG, "已同步防丢器断连报警配置: $shouldEnable (WiFi勿扰=$cachedWifiDndEnabled, WiFi连接=$cachedIsWifiConnected, 定时勿扰=$cachedScheduleDndEnabled, 在时段内=$isInDndRange, 断连开关=$cachedDisconnectAlarmEnabled)")
     }
 
-    // ==================== 核心修复：检查是否需要补偿报警 ====================
+    // 核心修复：检查是否需要补偿报警
     private fun checkCompensateAlarm() {
         if (bleManager.connectionState.value is BleConnectionState.Connected) {
             return
@@ -324,18 +328,15 @@ class BleMonitorService : Service() {
                 try {
                     deviceRepository.getDeviceByMac(deviceMac)?.let { device ->
                         currentDevice = device
-                        currentAlarmDelay = device.alarmDelaySeconds
-                        Log.d(TAG, "加载设备配置：延迟=$currentAlarmDelay 秒")
+                        Log.d(TAG, "加载设备配置完成")
                     } ?: run {
                         val defaultDevice = BleDevice(
                             macAddress = deviceMac,
                             name = "iTAG",
-                            rssiThreshold = -90,
-                            alarmDelaySeconds = DEFAULT_ALARM_DELAY
+                            rssiThreshold = -90
                         )
                         deviceRepository.insertDevice(defaultDevice)
                         currentDevice = defaultDevice
-                        currentAlarmDelay = DEFAULT_ALARM_DELAY
                     }
                     Log.d(TAG, "设备配置已加载")
                 } catch (e: Exception) {
@@ -451,25 +452,6 @@ class BleMonitorService : Service() {
 
             serviceScope.launch {
                 try {
-                    kotlinx.coroutines.coroutineScope {
-                        launch {
-                            deviceRepository.getDeviceByMacFlow(deviceMac)
-                                .onEach { device ->
-                                    device?.let {
-                                        currentAlarmDelay = it.alarmDelaySeconds
-                                        Log.d(TAG, "设置更新：延迟=$currentAlarmDelay 秒")
-                                    }
-                                }
-                                .launchIn(this)
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "设置监听失败", e)
-                }
-            }
-
-            serviceScope.launch {
-                try {
                     bleManager.bleEvents.collect { event ->
                         try {
                             handleBleEvent(event)
@@ -511,6 +493,8 @@ class BleMonitorService : Service() {
     private fun stopMonitoring() {
         isMonitoring = false
         rssiMonitorJob?.cancel()
+        pendingAlarmJob?.cancel()
+        pendingAlarmJob = null
         serviceScope.launch {
             alarmMutex.withLock {
                 stopAlarmIfPlayingLocked()
@@ -544,7 +528,11 @@ class BleMonitorService : Service() {
                     bluetoothDisconnectedTime = null
                     lastShouldTriggerPhoneAlarm = false
 
-                    // 核心修复：连接成功后强制重置同步状态，确保FFE2配置一定会被写入
+                    // 取消待执行的延迟报警
+                    pendingAlarmJob?.cancel()
+                    pendingAlarmJob = null
+
+                    // 连接成功后强制重置同步状态，确保FFE2配置一定会被写入
                     lastSyncedDisconnectAlarmState = null
                     syncDeviceAlarmConfig()
 
@@ -577,9 +565,18 @@ class BleMonitorService : Service() {
                     bluetoothDisconnectedTime = System.currentTimeMillis()
                     lastShouldTriggerPhoneAlarm = shouldTriggerPhoneAlarm()
 
-                    alarmMutex.withLock {
-                        if (!isAlarmPlaying && shouldTriggerPhoneAlarm()) {
-                            triggerPhoneAlarmLocked("断连报警", ignoreDnd = false)
+                    // 核心修复：延迟6秒后触发报警，与防丢器固件同步
+                    pendingAlarmJob?.cancel()
+                    pendingAlarmJob = serviceScope.launch {
+                        delay(DISCONNECT_ALARM_DELAY_MS)
+                        if (bleManager.connectionState.value is BleConnectionState.Disconnected) {
+                            alarmMutex.withLock {
+                                if (!isAlarmPlaying && shouldTriggerPhoneAlarm()) {
+                                    triggerPhoneAlarmLocked("断连报警（6秒延迟）", ignoreDnd = false)
+                                }
+                            }
+                        } else {
+                            Log.d(TAG, "设备在延迟期内已重连，取消报警")
                         }
                     }
                 }

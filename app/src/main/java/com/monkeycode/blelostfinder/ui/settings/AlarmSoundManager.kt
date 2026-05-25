@@ -29,6 +29,9 @@ class AlarmSoundManager @Inject constructor(
     private var recordingFilePath: String = getRecordingFilePath()
 
     private val contextApp get() = context.applicationContext
+    private val audioManager: AudioManager by lazy {
+        contextApp.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    }
 
     fun initializeRecordingDir() {
         try {
@@ -127,10 +130,40 @@ class AlarmSoundManager @Inject constructor(
 
     fun isRecording(): Boolean = isRecording
 
+    // ==================== 核心修复：播放前强制音量最大 ====================
+    /**
+     * 将闹钟音量和铃声音量都强制调到最大
+     * 解决用户误调静音导致听不到报警的问题
+     */
+    private fun forceMaxVolume() {
+        try {
+            // 1. 闹钟音量（STREAM_ALARM）— 报警铃声走这个流
+            val alarmMax = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
+            val alarmCurrent = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
+            if (alarmCurrent < alarmMax) {
+                audioManager.setStreamVolume(AudioManager.STREAM_ALARM, alarmMax, 0)
+                Log.d(TAG, "闹钟音量已调至最大: $alarmMax (原: $alarmCurrent)")
+            }
+
+            // 2. 铃声音量（STREAM_RING）— 帮助解决来电静音问题
+            val ringMax = audioManager.getStreamMaxVolume(AudioManager.STREAM_RING)
+            val ringCurrent = audioManager.getStreamVolume(AudioManager.STREAM_RING)
+            if (ringCurrent < ringMax) {
+                audioManager.setStreamVolume(AudioManager.STREAM_RING, ringMax, 0)
+                Log.d(TAG, "铃声音量已调至最大: $ringMax (原: $ringCurrent)")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "强制调大音量失败", e)
+        }
+    }
+
     // 核心修复：加 synchronized 防止多协程竞争 mediaPlayer 实例导致铃声叠加
     fun playAlarm(ringtonePath: String?) {
         synchronized(this) {
             stopPlayingInternal()
+
+            // ==================== 播放前强制音量最大 ====================
+            forceMaxVolume()
 
             if (ringtonePath.isNullOrEmpty()) {
                 Log.d(TAG, "No custom ringtone path, playing default alarm")
@@ -151,7 +184,7 @@ class AlarmSoundManager @Inject constructor(
                 try {
                     mediaPlayer = MediaPlayer().apply {
                         setDataSource(contextApp, uri)
-                        setAudioStreamType(AudioManager.STREAM_RING)
+                        setAudioStreamType(AudioManager.STREAM_ALARM)
                         setAudioAttributes(
                             AudioAttributes.Builder()
                                 .setUsage(AudioAttributes.USAGE_ALARM)
@@ -182,7 +215,7 @@ class AlarmSoundManager @Inject constructor(
             try {
                 mediaPlayer = MediaPlayer().apply {
                     setDataSource(ringtonePath)
-                    setAudioStreamType(AudioManager.STREAM_RING)
+                    setAudioStreamType(AudioManager.STREAM_ALARM)
                     setAudioAttributes(
                         AudioAttributes.Builder()
                             .setUsage(AudioAttributes.USAGE_ALARM)
@@ -205,6 +238,9 @@ class AlarmSoundManager @Inject constructor(
         synchronized(this) {
             stopPlayingInternal()
 
+            // 预览时也强制音量最大，让用户清楚听到选择的铃声
+            forceMaxVolume()
+
             if (uri == null) {
                 playDefaultAlarmInternal()
                 return
@@ -213,7 +249,7 @@ class AlarmSoundManager @Inject constructor(
             try {
                 mediaPlayer = MediaPlayer().apply {
                     setDataSource(contextApp, uri)
-                    setAudioStreamType(AudioManager.STREAM_RING)
+                    setAudioStreamType(AudioManager.STREAM_ALARM)
                     setAudioAttributes(
                         AudioAttributes.Builder()
                             .setUsage(AudioAttributes.USAGE_ALARM)
@@ -245,7 +281,7 @@ class AlarmSoundManager @Inject constructor(
 
             mediaPlayer = MediaPlayer().apply {
                 setDataSource(contextApp, alarmUri)
-                setAudioStreamType(AudioManager.STREAM_RING)
+                setAudioStreamType(AudioManager.STREAM_ALARM)
                 setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_ALARM)

@@ -255,18 +255,50 @@ class BleManager @Inject constructor(
                     setDisconnectAlarmEnabled(pending)
                 }
 
+                // ==================== 核心修复：延迟读取电池，避免与descriptor写入冲突 ====================
                 batteryCharacteristic?.let {
-                    gatt.readCharacteristic(it)
+                    mainHandler.postDelayed({
+                        try {
+                            gatt.readCharacteristic(it)
+                            Log.d(TAG, "延迟读取电池电量")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "延迟读取电池失败", e)
+                        }
+                    }, 500)
                 }
             }
         }
 
+        // ==================== 核心修复：同时支持新版和旧版onCharacteristicRead ====================
         override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
-            Log.d(TAG, "Characteristic read: ${characteristic.uuid}, status: $status")
+            Log.d(TAG, "Characteristic read(new): ${characteristic.uuid}, status: $status, value: ${value.contentToString()}")
+            handleCharacteristicRead(characteristic, value, status)
+        }
+
+        @Deprecated("Deprecated in API 33")
+        @Suppress("DEPRECATION")
+        override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
+            @Suppress("DEPRECATION")
+            val value = characteristic.value
+            Log.d(TAG, "Characteristic read(legacy): ${characteristic.uuid}, status: $status, value: ${value?.contentToString()}")
+            if (value != null) {
+                handleCharacteristicRead(characteristic, value, status)
+            }
+        }
+
+        private fun handleCharacteristicRead(characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 if (characteristic.uuid == BATTERY_LEVEL_CHARACTERISTIC_UUID) {
-                    _batteryLevel.value = value[0].toInt()
+                    if (value.isNotEmpty()) {
+                        val battery = value[0].toInt() and 0xFF
+                        _batteryLevel.value = battery
+                        Log.d(TAG, "电池电量读取成功: $battery%")
+                    } else {
+                        Log.w(TAG, "电池电量读取返回空值")
+                    }
                 }
+            } else {
+                Log.e(TAG, "Characteristic read failed: ${characteristic.uuid}, status: $status")
             }
         }
 
@@ -600,6 +632,21 @@ class BleManager @Inject constructor(
             Log.e(TAG, "readBatteryLevel 外部异常", e)
             null
         }
+    }
+
+    // ==================== 新增：主动读取电池电量（供外部调用） ====================
+    @SuppressLint("MissingPermission")
+    fun readBattery() {
+        batteryCharacteristic?.let { characteristic ->
+            bluetoothGatt?.let { gatt ->
+                try {
+                    gatt.readCharacteristic(characteristic)
+                    Log.d(TAG, "主动读取电池电量")
+                } catch (e: Exception) {
+                    Log.e(TAG, "主动读取电池失败", e)
+                }
+            }
+        } ?: Log.w(TAG, "电池特征值未找到，无法读取")
     }
 
     fun isBluetoothEnabled(): Boolean {

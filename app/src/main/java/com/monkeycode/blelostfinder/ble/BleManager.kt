@@ -28,14 +28,11 @@ class BleManager @Inject constructor(
     companion object {
         private const val TAG = "BleManager"
 
-        // ==================== 核心修复：双击检测参数（参考i-Searching）====================
-        // 消抖窗口：收到通知后忽略后续通知的时间（防止固件一次单击发多次通知）
-        private const val DEBOUNCE_MS = 300L
-        // 双击窗口：第一次按下后，在此时间内收到第二次按下才算双击
-        // 参考i-Searching原始代码：DOUBLE_PRESS_TIMEOUT = 2000L
-        private const val DOUBLE_CLICK_WINDOW_MS = 2000L
-        // 双击冷却期：触发双击后，在此时间内不再响应（防止报警停止后立即又触发）
-        private const val DOUBLE_CLICK_COOLDOWN_MS = 1500L
+        // ========== 核心修复：改为 1000ms，与 i-Searching 完全一致 ==========
+        private const val DOUBLE_PRESS_TIMEOUT = 1000L
+        // 过滤固件一次点击发出的重复 BLE 通知（间隔 <10ms 视为重复）
+        private const val MIN_DOUBLE_PRESS_INTERVAL = 10L
+        private const val DOUBLE_CLICK_COOLDOWN = 800L
 
         const val I_DEVICE_NAME = "iTAG"
         const val I_DEVICE_MAC = "FF:FF:11:8C:4E:3B"
@@ -96,20 +93,10 @@ class BleManager @Inject constructor(
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // ==================== 核心修复：双击检测状态机 ====================
-    /**
-     * 按键检测状态：
-     * - IDLE: 空闲，等待第一次按下
-     * - DEBOUNCE: 消抖中，收到通知后忽略后续通知
-     * - WAITING_SECOND: 等待第二次按下（双击窗口期）
-     * - COOLDOWN: 冷却期，刚触发双击，暂时不响应
-     */
-    private enum class ClickState { IDLE, DEBOUNCE, WAITING_SECOND, COOLDOWN }
-    private var clickState = ClickState.IDLE
-    private var firstClickTime = 0L
+    // ==================== 核心修复：实例变量（非静态），生命周期跟随连接 ====================
+    private var lastClickTime = 0L
     private var lastDoubleClickTime = 0L
-    private val clickHandler = Handler(Looper.getMainLooper())
-    private var doubleClickWindowRunnable: Runnable? = null
+    // ===================================================================================
 
     // ==================== 新增：统一决策防丢器断连报警配置 ====================
 
@@ -200,12 +187,24 @@ class BleManager @Inject constructor(
             Log.d(TAG, "Connection state changed: $status, newState: $newState")
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
+                    // ==================== 核心修复：连接成功后重置点击计时器 ====================
+                    lastClickTime = 0L
+                    lastDoubleClickTime = 0L
+                    Log.d(TAG, "连接成功，重置双击计时器")
+                    // ========================================================================
+
                     _connectionState.value = BleConnectionState.Connected
                     bluetoothGatt = gatt
                     gatt.discoverServices()
                     startRssiPolling()
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
+                    // ==================== 核心修复：断连时也重置计时器，确保下次从零开始 ====================
+                    lastClickTime = 0L
+                    lastDoubleClickTime = 0L
+                    Log.d(TAG, "设备断开，重置双击计时器")
+                    // ===================================================================================
+
                     Log.d(TAG, "设备已断开，准备自动重连...")
                     _connectionState.value = BleConnectionState.Disconnected
                     bluetoothGatt = null
@@ -342,84 +341,60 @@ class BleManager @Inject constructor(
             processWriteQueue()
         }
 
-        // ==================== 核心修复：状态机双击检测，参考i-Searching 2000ms窗口 ====================
+        // ==================== 核心修复：改为 i-Searching 同款双击检测逻辑 ====================
         private fun onCharacteristicValueChanged(characteristic: BluetoothGattCharacteristic, value: ByteArray) {
             Log.d(TAG, "Characteristic changed: ${characteristic.uuid}, value: ${value.contentToString()}")
             if (characteristic.uuid == CUSTOM_CHARACTERISTIC_UUID) {
+                // 和 i-Searching 一样：只处理 value[0] == 1 的按钮通知
                 if (value.isEmpty() || value[0] != 1.toByte()) {
-                    Log.d(TAG, "收到非按键通知，忽略")
+                    Log.d(TAG, "忽略非按钮通知: ${value.contentToString()}")
                     return
                 }
 
                 val currentTime = System.currentTimeMillis()
 
-                // 冷却期检查
-                if (currentTime - lastDoubleClickTime < DOUBLE_CLICK_COOLDOWN_MS) {
-                    Log.d(TAG, "双击冷却期内(${DOUBLE_CLICK_COOLDOWN_MS}ms)，忽略通知")
+                // 冷却期：双击成功后 800ms 内不再响应（防止连续快速点击反复触发）
+                if (currentTime - lastDoubleClickTime < DOUBLE_CLICK_COOLDOWN) {
+                    Log.d(TAG, "双击冷却期内，忽略通知")
                     return
                 }
 
-                when (clickState) {
-                    ClickState.IDLE -> {
-                        // 第一次按下：进入消抖期
-                        clickState = ClickState.DEBOUNCE
-                        firstClickTime = currentTime
-                        Log.d(TAG, "第一次按下，进入消抖期")
+                val lastTime = lastClickTime
+                if (lastTime == 0L) {
+                    // 第一次点击：记录时间，等待第二次
+                    lastClickTime = currentTime
+                    Log.d(TAG, "第一次点击，等待第二次...")
+                    return
+                }
 
-                        // 消抖期结束后，进入等待窗口期
-                        clickHandler.postDelayed({
-                            if (clickState == ClickState.DEBOUNCE) {
-                                clickState = ClickState.WAITING_SECOND
-                                Log.d(TAG, "消抖结束，进入双击等待窗口期(${DOUBLE_CLICK_WINDOW_MS}ms)")
-
-                                // 双击窗口期结束后，如果没有第二次按下，回到IDLE（忽略单击）
-                                doubleClickWindowRunnable = Runnable {
-                                    if (clickState == ClickState.WAITING_SECOND) {
-                                        clickState = ClickState.IDLE
-                                        Log.d(TAG, "双击窗口期结束，未收到第二次按下，忽略单击")
-                                    }
-                                }
-                                clickHandler.postDelayed(doubleClickWindowRunnable!!, DOUBLE_CLICK_WINDOW_MS)
-                            }
-                        }, DEBOUNCE_MS)
-                    }
-
-                    ClickState.DEBOUNCE -> {
-                        // 消抖期内收到通知：认为是固件重复发送，忽略
-                        Log.d(TAG, "消抖期内收到通知，忽略（固件重复发送）")
-                    }
-
-                    ClickState.WAITING_SECOND -> {
-                        // 双击窗口期内收到第二次按下：确认双击！
-                        clickState = ClickState.COOLDOWN
-                        lastDoubleClickTime = currentTime
-                        // 取消窗口期结束的定时器
-                        doubleClickWindowRunnable?.let { clickHandler.removeCallbacks(it) }
-                        doubleClickWindowRunnable = null
-
-                        managerScope.launch {
-                            try {
-                                _bleEvents.emit(BleEvent.DoubleButtonPressed)
-                                Log.d(TAG, "检测到真正的双击事件！间隔=${currentTime - firstClickTime}ms")
-                            } catch (e: Exception) {
-                                Log.e(TAG, "发送双击事件失败", e)
-                            }
+                val interval = currentTime - lastTime
+                // i-Searching 同款判断：间隔在 10ms ~ 1000ms 之间才视为有效双击
+                if (interval < DOUBLE_PRESS_TIMEOUT && interval > MIN_DOUBLE_PRESS_INTERVAL) {
+                    // 有效双击
+                    lastClickTime = 0L
+                    lastDoubleClickTime = currentTime
+                    managerScope.launch {
+                        try {
+                            _bleEvents.emit(BleEvent.DoubleButtonPressed)
+                            Log.d(TAG, "双击事件已 emit（间隔${interval}ms）")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "发送双击事件失败", e)
                         }
-
-                        // 冷却期结束后回到IDLE
-                        clickHandler.postDelayed({
-                            clickState = ClickState.IDLE
-                            Log.d(TAG, "双击冷却期结束，回到空闲状态")
-                        }, DOUBLE_CLICK_COOLDOWN_MS)
                     }
-
-                    ClickState.COOLDOWN -> {
-                        // 冷却期内，忽略
-                        Log.d(TAG, "冷却期内收到通知，忽略")
+                    Log.d(TAG, "检测到双击事件，间隔${interval}ms")
+                } else {
+                    // 间隔太长(>1000ms) 或 太短(<10ms，固件重复通知)
+                    // 视为新的第一次点击，刷新计时器（而不是触发双击）
+                    lastClickTime = currentTime
+                    if (interval <= MIN_DOUBLE_PRESS_INTERVAL) {
+                        Log.d(TAG, "间隔${interval}ms太短，视为固件重复通知，刷新计时器")
+                    } else {
+                        Log.d(TAG, "间隔${interval}ms超过窗口，视为新的第一次点击")
                     }
                 }
             }
         }
+        // =================================================================================
 
         override fun onReadRemoteRssi(gatt: BluetoothGatt, rssi: Int, status: Int) {
             Log.d(TAG, "RSSI: $rssi, status: $status")

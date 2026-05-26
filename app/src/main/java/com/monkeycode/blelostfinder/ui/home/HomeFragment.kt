@@ -1,11 +1,13 @@
 package com.monkeycode.blelostfinder.ui.home
 
 import android.os.Bundle
+import android.text.Spannable
+import android.text.SpannableString
+import android.text.style.AbsoluteSizeSpan
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.TextView
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.viewModels
 import androidx.lifecycle.Lifecycle
@@ -212,24 +214,26 @@ class HomeFragment : Fragment() {
         }
     }
 
-    // ==================== 核心修复：弹窗提示文字放大 ====================
+    // ==================== 核心修复：弹窗 message 字体放大到 64sp（约四倍） ====================
     private fun showPhoneAlarmDialog() {
         // 如果已有弹窗，先关闭
         alarmDialog?.dismiss()
 
         val deviceName = viewModel.device.value?.name ?: "iTAG"
 
-        // 创建自定义TextView，设置大字体
-        val messageTextView = TextView(requireContext()).apply {
-            text = "按下防丢器按钮两次可以停止报警"
-            textSize = 22f  // 原默认约14sp，放大到22sp（约1.5倍，视觉上明显更大）
-            setPadding(48, 32, 48, 32)  // 增加内边距
-            setTextColor(requireContext().getColor(android.R.color.black))
+        // 核心修复：用 SpannableString 把 message 字体设为 64sp（默认约 16sp 的四倍）
+        val messageText = SpannableString("按下防丢器按钮两次可以停止报警").apply {
+            setSpan(
+                AbsoluteSizeSpan(64, true), // 64sp，true 表示使用 sp 单位
+                0,
+                length,
+                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
         }
 
         alarmDialog = MaterialAlertDialogBuilder(requireContext())
             .setTitle("[$deviceName] 正在寻找您的手机")
-            .setView(messageTextView)  // 使用自定义TextView替代setMessage
+            .setMessage(messageText)   // 只改这里，标题不受影响
             .setPositiveButton("好的") { _, _ ->
                 // 强制停止所有铃声
                 viewModel.stopPhoneAlarm()
@@ -238,6 +242,7 @@ class HomeFragment : Fragment() {
             .setCancelable(false)
             .show()
     }
+    // =================================================================================
 
     private fun dismissAlarmDialog() {
         alarmDialog?.dismiss()

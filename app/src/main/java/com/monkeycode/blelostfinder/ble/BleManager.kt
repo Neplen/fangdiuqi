@@ -28,11 +28,13 @@ class BleManager @Inject constructor(
     companion object {
         private const val TAG = "BleManager"
 
-        private const val DOUBLE_PRESS_TIMEOUT = 2000L
-        private var lastButtonPressTime = 0L
-
-        private var lastDoubleClickTime = 0L
-        private const val DOUBLE_CLICK_COOLDOWN = 800L
+        // ==================== 核心修复：双击检测参数 ====================
+        // 消抖窗口：收到通知后忽略后续通知的时间（防止固件一次单击发多次通知）
+        private const val DEBOUNCE_MS = 300L
+        // 双击窗口：第一次按下后，在此时间内收到第二次按下才算双击
+        private const val DOUBLE_CLICK_WINDOW_MS = 400L
+        // 双击冷却期：触发双击后，在此时间内不再响应（防止报警停止后立即又触发）
+        private const val DOUBLE_CLICK_COOLDOWN_MS = 1500L
 
         const val I_DEVICE_NAME = "iTAG"
         const val I_DEVICE_MAC = "FF:FF:11:8C:4E:3B"
@@ -92,6 +94,21 @@ class BleManager @Inject constructor(
     private val managerScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    // ==================== 核心修复：双击检测状态机 ====================
+    /**
+     * 按键检测状态：
+     * - IDLE: 空闲，等待第一次按下
+     * - DEBOUNCE: 消抖中，收到通知后忽略后续通知
+     * - WAITING_SECOND: 等待第二次按下（双击窗口期）
+     * - COOLDOWN: 冷却期，刚触发双击，暂时不响应
+     */
+    private enum class ClickState { IDLE, DEBOUNCE, WAITING_SECOND, COOLDOWN }
+    private var clickState = ClickState.IDLE
+    private var firstClickTime = 0L
+    private var lastDoubleClickTime = 0L
+    private val clickHandler = Handler(Looper.getMainLooper())
+    private var doubleClickWindowRunnable: Runnable? = null
 
     // ==================== 新增：统一决策防丢器断连报警配置 ====================
 
@@ -324,32 +341,81 @@ class BleManager @Inject constructor(
             processWriteQueue()
         }
 
+        // ==================== 核心修复：状态机双击检测，彻底过滤单击误触 ====================
         private fun onCharacteristicValueChanged(characteristic: BluetoothGattCharacteristic, value: ByteArray) {
             Log.d(TAG, "Characteristic changed: ${characteristic.uuid}, value: ${value.contentToString()}")
             if (characteristic.uuid == CUSTOM_CHARACTERISTIC_UUID) {
-                val currentTime = System.currentTimeMillis()
-
-                if (currentTime - lastDoubleClickTime < DOUBLE_CLICK_COOLDOWN) {
-                    Log.d(TAG, "双击冷却期内，忽略重复通知")
+                if (value.isEmpty() || value[0] != 1.toByte()) {
+                    Log.d(TAG, "收到非按键通知，忽略")
                     return
                 }
 
-                if (currentTime - lastButtonPressTime < DOUBLE_PRESS_TIMEOUT) {
-                    lastButtonPressTime = 0
-                    lastDoubleClickTime = currentTime
+                val currentTime = System.currentTimeMillis()
 
-                    managerScope.launch {
-                        try {
-                            _bleEvents.emit(BleEvent.DoubleButtonPressed)
-                            Log.d(TAG, "双击事件已 emit")
-                        } catch (e: Exception) {
-                            Log.e(TAG, "发送双击事件失败", e)
-                        }
+                // 冷却期检查
+                if (currentTime - lastDoubleClickTime < DOUBLE_CLICK_COOLDOWN_MS) {
+                    Log.d(TAG, "双击冷却期内(${DOUBLE_CLICK_COOLDOWN_MS}ms)，忽略通知")
+                    return
+                }
+
+                when (clickState) {
+                    ClickState.IDLE -> {
+                        // 第一次按下：进入消抖期
+                        clickState = ClickState.DEBOUNCE
+                        firstClickTime = currentTime
+                        Log.d(TAG, "第一次按下，进入消抖期")
+
+                        // 消抖期结束后，如果没有第二次按下，进入等待窗口期
+                        clickHandler.postDelayed({
+                            if (clickState == ClickState.DEBOUNCE) {
+                                clickState = ClickState.WAITING_SECOND
+                                Log.d(TAG, "消抖结束，进入双击等待窗口期")
+
+                                // 双击窗口期结束后，如果没有第二次按下，回到IDLE（忽略单击）
+                                doubleClickWindowRunnable = Runnable {
+                                    if (clickState == ClickState.WAITING_SECOND) {
+                                        clickState = ClickState.IDLE
+                                        Log.d(TAG, "双击窗口期结束，未收到第二次按下，忽略单击")
+                                    }
+                                }
+                                clickHandler.postDelayed(doubleClickWindowRunnable!!, DOUBLE_CLICK_WINDOW_MS)
+                            }
+                        }, DEBOUNCE_MS)
                     }
-                    Log.d(TAG, "检测到双击事件")
-                } else {
-                    lastButtonPressTime = currentTime
-                    Log.d(TAG, "检测到单击事件，等待第二次点击")
+
+                    ClickState.DEBOUNCE -> {
+                        // 消抖期内收到通知：认为是固件重复发送，忽略
+                        Log.d(TAG, "消抖期内收到通知，忽略（固件重复发送）")
+                    }
+
+                    ClickState.WAITING_SECOND -> {
+                        // 双击窗口期内收到第二次按下：确认双击！
+                        clickState = ClickState.COOLDOWN
+                        lastDoubleClickTime = currentTime
+                        // 取消窗口期结束的定时器
+                        doubleClickWindowRunnable?.let { clickHandler.removeCallbacks(it) }
+                        doubleClickWindowRunnable = null
+
+                        managerScope.launch {
+                            try {
+                                _bleEvents.emit(BleEvent.DoubleButtonPressed)
+                                Log.d(TAG, "检测到真正的双击事件！")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "发送双击事件失败", e)
+                            }
+                        }
+
+                        // 冷却期结束后回到IDLE
+                        clickHandler.postDelayed({
+                            clickState = ClickState.IDLE
+                            Log.d(TAG, "双击冷却期结束，回到空闲状态")
+                        }, DOUBLE_CLICK_COOLDOWN_MS)
+                    }
+
+                    ClickState.COOLDOWN -> {
+                        // 冷却期内，忽略
+                        Log.d(TAG, "冷却期内收到通知，忽略")
+                    }
                 }
             }
         }

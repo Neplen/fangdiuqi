@@ -28,11 +28,12 @@ class BleManager @Inject constructor(
     companion object {
         private const val TAG = "BleManager"
 
-        // ==================== 核心修复：双击检测参数 ====================
+        // ==================== 核心修复：双击检测参数（参考i-Searching）====================
         // 消抖窗口：收到通知后忽略后续通知的时间（防止固件一次单击发多次通知）
         private const val DEBOUNCE_MS = 300L
         // 双击窗口：第一次按下后，在此时间内收到第二次按下才算双击
-        private const val DOUBLE_CLICK_WINDOW_MS = 400L
+        // 参考i-Searching原始代码：DOUBLE_PRESS_TIMEOUT = 2000L
+        private const val DOUBLE_CLICK_WINDOW_MS = 2000L
         // 双击冷却期：触发双击后，在此时间内不再响应（防止报警停止后立即又触发）
         private const val DOUBLE_CLICK_COOLDOWN_MS = 1500L
 
@@ -341,7 +342,7 @@ class BleManager @Inject constructor(
             processWriteQueue()
         }
 
-        // ==================== 核心修复：状态机双击检测，彻底过滤单击误触 ====================
+        // ==================== 核心修复：状态机双击检测，参考i-Searching 2000ms窗口 ====================
         private fun onCharacteristicValueChanged(characteristic: BluetoothGattCharacteristic, value: ByteArray) {
             Log.d(TAG, "Characteristic changed: ${characteristic.uuid}, value: ${value.contentToString()}")
             if (characteristic.uuid == CUSTOM_CHARACTERISTIC_UUID) {
@@ -365,11 +366,11 @@ class BleManager @Inject constructor(
                         firstClickTime = currentTime
                         Log.d(TAG, "第一次按下，进入消抖期")
 
-                        // 消抖期结束后，如果没有第二次按下，进入等待窗口期
+                        // 消抖期结束后，进入等待窗口期
                         clickHandler.postDelayed({
                             if (clickState == ClickState.DEBOUNCE) {
                                 clickState = ClickState.WAITING_SECOND
-                                Log.d(TAG, "消抖结束，进入双击等待窗口期")
+                                Log.d(TAG, "消抖结束，进入双击等待窗口期(${DOUBLE_CLICK_WINDOW_MS}ms)")
 
                                 // 双击窗口期结束后，如果没有第二次按下，回到IDLE（忽略单击）
                                 doubleClickWindowRunnable = Runnable {
@@ -399,7 +400,7 @@ class BleManager @Inject constructor(
                         managerScope.launch {
                             try {
                                 _bleEvents.emit(BleEvent.DoubleButtonPressed)
-                                Log.d(TAG, "检测到真正的双击事件！")
+                                Log.d(TAG, "检测到真正的双击事件！间隔=${currentTime - firstClickTime}ms")
                             } catch (e: Exception) {
                                 Log.e(TAG, "发送双击事件失败", e)
                             }

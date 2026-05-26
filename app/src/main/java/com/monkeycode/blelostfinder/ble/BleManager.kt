@@ -96,6 +96,8 @@ class BleManager @Inject constructor(
     // ==================== 核心修复：实例变量（非静态），生命周期跟随连接 ====================
     private var lastClickTime = 0L
     private var lastDoubleClickTime = 0L
+    // 新增：超时清零任务，防止单击状态永久保留
+    private var clickTimeoutRunnable: Runnable? = null
     // ===================================================================================
 
     // ==================== 新增：统一决策防丢器断连报警配置 ====================
@@ -188,8 +190,7 @@ class BleManager @Inject constructor(
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     // ==================== 核心修复：连接成功后重置点击计时器 ====================
-                    lastClickTime = 0L
-                    lastDoubleClickTime = 0L
+                    resetClickState()
                     Log.d(TAG, "连接成功，重置双击计时器")
                     // ========================================================================
 
@@ -200,8 +201,7 @@ class BleManager @Inject constructor(
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     // ==================== 核心修复：断连时也重置计时器，确保下次从零开始 ====================
-                    lastClickTime = 0L
-                    lastDoubleClickTime = 0L
+                    resetClickState()
                     Log.d(TAG, "设备断开，重置双击计时器")
                     // ===================================================================================
 
@@ -341,7 +341,7 @@ class BleManager @Inject constructor(
             processWriteQueue()
         }
 
-        // ==================== 核心修复：改为 i-Searching 同款双击检测逻辑 ====================
+        // ==================== 核心修复：改为 i-Searching 同款双击检测逻辑 + 超时清零 ====================
         private fun onCharacteristicValueChanged(characteristic: BluetoothGattCharacteristic, value: ByteArray) {
             Log.d(TAG, "Characteristic changed: ${characteristic.uuid}, value: ${value.contentToString()}")
             if (characteristic.uuid == CUSTOM_CHARACTERISTIC_UUID) {
@@ -361,8 +361,9 @@ class BleManager @Inject constructor(
 
                 val lastTime = lastClickTime
                 if (lastTime == 0L) {
-                    // 第一次点击：记录时间，等待第二次
+                    // 第一次点击：记录时间，设置超时清零任务，然后返回
                     lastClickTime = currentTime
+                    scheduleClickTimeout()
                     Log.d(TAG, "第一次点击，等待第二次...")
                     return
                 }
@@ -370,7 +371,8 @@ class BleManager @Inject constructor(
                 val interval = currentTime - lastTime
                 // i-Searching 同款判断：间隔在 10ms ~ 1000ms 之间才视为有效双击
                 if (interval < DOUBLE_PRESS_TIMEOUT && interval > MIN_DOUBLE_PRESS_INTERVAL) {
-                    // 有效双击
+                    // 有效双击：取消超时任务，清零计时器，触发事件
+                    cancelClickTimeout()
                     lastClickTime = 0L
                     lastDoubleClickTime = currentTime
                     managerScope.launch {
@@ -384,8 +386,10 @@ class BleManager @Inject constructor(
                     Log.d(TAG, "检测到双击事件，间隔${interval}ms")
                 } else {
                     // 间隔太长(>1000ms) 或 太短(<10ms，固件重复通知)
-                    // 视为新的第一次点击，刷新计时器（而不是触发双击）
+                    // 视为新的第一次点击，刷新计时器
+                    cancelClickTimeout()
                     lastClickTime = currentTime
+                    scheduleClickTimeout()
                     if (interval <= MIN_DOUBLE_PRESS_INTERVAL) {
                         Log.d(TAG, "间隔${interval}ms太短，视为固件重复通知，刷新计时器")
                     } else {
@@ -407,6 +411,37 @@ class BleManager @Inject constructor(
             Log.d(TAG, "Descriptor write: $status")
         }
     }
+
+    // ==================== 新增：单击超时清零机制 ====================
+    /**
+     * 如果超过 DOUBLE_PRESS_TIMEOUT（1000ms）没有第二次点击，
+     * 自动清零 lastClickTime，防止单击状态永久保留导致隔很久后误触
+     */
+    private fun scheduleClickTimeout() {
+        cancelClickTimeout()
+        val runnable = Runnable {
+            if (lastClickTime != 0L) {
+                Log.d(TAG, "单击超时（>${DOUBLE_PRESS_TIMEOUT}ms），自动清零计时器")
+                lastClickTime = 0L
+            }
+        }
+        clickTimeoutRunnable = runnable
+        mainHandler.postDelayed(runnable, DOUBLE_PRESS_TIMEOUT + 100) // 多给100ms缓冲
+    }
+
+    private fun cancelClickTimeout() {
+        clickTimeoutRunnable?.let {
+            mainHandler.removeCallbacks(it)
+            clickTimeoutRunnable = null
+        }
+    }
+
+    private fun resetClickState() {
+        cancelClickTimeout()
+        lastClickTime = 0L
+        lastDoubleClickTime = 0L
+    }
+    // =============================================================
 
     fun initialize(): Boolean {
         try {

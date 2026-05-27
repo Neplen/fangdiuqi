@@ -145,8 +145,9 @@ class BleManager @Inject constructor(
 
     // 核心修复：添加写入超时保护，防止 BLE 回调丢失导致队列永久卡住
     private fun processWriteQueue() {
-        writeTimeoutRunnable?.let {
-            mainHandler.removeCallbacks(it)
+        val currentTimeoutRunnable = writeTimeoutRunnable
+        if (currentTimeoutRunnable != null) {
+            mainHandler.removeCallbacks(currentTimeoutRunnable)
             writeTimeoutRunnable = null
         }
 
@@ -180,12 +181,13 @@ class BleManager @Inject constructor(
             mainHandler.postDelayed({ processWriteQueue() }, 100)
         } else {
             Log.d(TAG, "已发送写入请求: ${request.characteristic.uuid}, 队列剩余: ${writeQueue.size}")
-            writeTimeoutRunnable = Runnable {
+            val newTimeoutRunnable = Runnable {
                 Log.w(TAG, "写入操作超时(${WRITE_TIMEOUT_MS}ms)，强制继续队列，特征值: ${request.characteristic.uuid}")
                 isWriting = false
                 processWriteQueue()
             }
-            mainHandler.postDelayed(writeTimeoutRunnable, WRITE_TIMEOUT_MS)
+            writeTimeoutRunnable = newTimeoutRunnable
+            mainHandler.postDelayed(newTimeoutRunnable, WRITE_TIMEOUT_MS)
         }
     }
 
@@ -210,8 +212,11 @@ class BleManager @Inject constructor(
                     pendingDisconnectAlarmState = null
                     writeQueue.clear()
                     isWriting = false
-                    writeTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
-                    writeTimeoutRunnable = null
+                    val currentTimeoutRunnable = writeTimeoutRunnable
+                    if (currentTimeoutRunnable != null) {
+                        mainHandler.removeCallbacks(currentTimeoutRunnable)
+                        writeTimeoutRunnable = null
+                    }
 
                     rssiPollingJob?.cancel()
                     rssiPollingJob = null
@@ -328,8 +333,9 @@ class BleManager @Inject constructor(
             status: Int
         ) {
             // 核心修复：取消超时保护
-            writeTimeoutRunnable?.let {
-                mainHandler.removeCallbacks(it)
+            val currentTimeoutRunnable = writeTimeoutRunnable
+            if (currentTimeoutRunnable != null) {
+                mainHandler.removeCallbacks(currentTimeoutRunnable)
                 writeTimeoutRunnable = null
             }
             if (status != BluetoothGatt.GATT_SUCCESS) {
@@ -746,8 +752,11 @@ class BleManager @Inject constructor(
             pendingDisconnectAlarmState = null
             writeQueue.clear()
             isWriting = false
-            writeTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
-            writeTimeoutRunnable = null
+            val currentTimeoutRunnable = writeTimeoutRunnable
+            if (currentTimeoutRunnable != null) {
+                mainHandler.removeCallbacks(currentTimeoutRunnable)
+                writeTimeoutRunnable = null
+            }
         }
     }
 

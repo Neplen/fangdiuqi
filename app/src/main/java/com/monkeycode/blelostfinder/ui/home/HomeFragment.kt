@@ -31,9 +31,7 @@ class HomeFragment : Fragment() {
 
     private val viewModel: HomeViewModel by viewModels()
 
-    // 报警状态标记
     private var isAlarmPlaying = false
-    // 弹窗引用
     private var alarmDialog: androidx.appcompat.app.AlertDialog? = null
 
     override fun onCreateView(
@@ -47,24 +45,17 @@ class HomeFragment : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-
         setupObservers()
         setupClickListeners()
     }
 
     override fun onResume() {
         super.onResume()
-
-        // 如果正在报警，显示弹窗（不自动停止）
         if (viewModel.phoneAlarmTriggered.value) {
-            Log.d("HomeFragment", "onResume: 检测到报警状态，显示弹窗")
             showPhoneAlarmDialog()
         }
-
-        // 如果当前是断开状态，自动尝试重连
         val currentState = viewModel.connectionState.value
         if (currentState is BleConnectionState.Disconnected) {
-            Log.d("HomeFragment", "onResume: 检测到断开状态，自动重连")
             connectToDevice()
         }
     }
@@ -148,7 +139,6 @@ class HomeFragment : Fragment() {
     }
 
     private fun updateMonitorSwitch(isRunning: Boolean) {
-        // 只有当开关当前状态与服务状态不一致时才更新，避免触发 onCheckedChanged
         if (binding.switchMonitor.isChecked != isRunning) {
             binding.switchMonitor.isChecked = isRunning
         }
@@ -160,8 +150,6 @@ class HomeFragment : Fragment() {
         }
 
         binding.btnConnectDevice.setOnClickListener {
-            // 核心修复：点击"连接"按钮时，强制重新连接
-            // 解决"超过 40 秒回到范围，显示已断开，点击连接无效"的问题
             connectToDevice()
             Snackbar.make(binding.root, "正在连接设备...", Snackbar.LENGTH_SHORT).show()
         }
@@ -180,23 +168,17 @@ class HomeFragment : Fragment() {
     }
 
     private fun connectToDevice() {
-        // 核心修复：停止手机报警（如果正在报警）
-        // 解决"回到范围后手机仍在报警，打开 APP 点击连接"的场景
         viewModel.stopPhoneAlarm()
-
-        // 触发重连
         viewModel.connectToDevice()
     }
 
     private fun toggleDeviceAlarm() {
         if (isAlarmPlaying) {
-            // 停止报警
             viewModel.stopDeviceAlarm()
             isAlarmPlaying = false
             updateAlarmButton(false)
             Snackbar.make(binding.root, "已停止报警", Snackbar.LENGTH_SHORT).show()
         } else {
-            // 启动报警
             viewModel.startDeviceAlarm()
             isAlarmPlaying = true
             updateAlarmButton(true)
@@ -214,17 +196,15 @@ class HomeFragment : Fragment() {
         }
     }
 
-    // ==================== 核心修复：弹窗 message 字体放大到 64sp（约四倍） ====================
+    // ==================== 修复：字体从 64sp 改为 24sp（两倍大小，能完整显示） ====================
     private fun showPhoneAlarmDialog() {
-        // 如果已有弹窗，先关闭
         alarmDialog?.dismiss()
 
         val deviceName = viewModel.device.value?.name ?: "iTAG"
 
-        // 核心修复：用 SpannableString 把 message 字体设为 64sp（默认约 16sp 的四倍）
         val messageText = SpannableString("按下防丢器按钮两次可以停止报警").apply {
             setSpan(
-                AbsoluteSizeSpan(64, true), // 64sp，true 表示使用 sp 单位
+                AbsoluteSizeSpan(24, true), // 24sp，两倍大小，能完整显示
                 0,
                 length,
                 Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
@@ -233,9 +213,8 @@ class HomeFragment : Fragment() {
 
         alarmDialog = MaterialAlertDialogBuilder(requireContext())
             .setTitle("[$deviceName] 正在寻找您的手机")
-            .setMessage(messageText)   // 只改这里，标题不受影响
+            .setMessage(messageText)
             .setPositiveButton("好的") { _, _ ->
-                // 强制停止所有铃声
                 viewModel.stopPhoneAlarm()
                 dismissAlarmDialog()
             }

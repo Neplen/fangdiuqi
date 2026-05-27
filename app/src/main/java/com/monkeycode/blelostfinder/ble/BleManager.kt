@@ -28,9 +28,8 @@ class BleManager @Inject constructor(
     companion object {
         private const val TAG = "BleManager"
 
-        // ========== 核心修复：改为 1000ms，与 i-Searching 完全一致 ==========
+        // 与 i-Searching 完全一致
         private const val DOUBLE_PRESS_TIMEOUT = 1000L
-        // 过滤固件一次点击发出的重复 BLE 通知（间隔 <10ms 视为重复）
         private const val MIN_DOUBLE_PRESS_INTERVAL = 10L
         private const val DOUBLE_CLICK_COOLDOWN = 800L
 
@@ -46,12 +45,10 @@ class BleManager @Inject constructor(
         val CUSTOM_SERVICE_UUID = UUID.fromString("0000ffe0-0000-1000-8000-00805f9b34fb")
         val CUSTOM_CHARACTERISTIC_UUID = UUID.fromString("0000ffe1-0000-1000-8000-00805f9b34fb")
 
-        // 核心修复：新增断连报警配置特征值（i-Searching 同款）
         val DISCONNECT_ALARM_CHARACTERISTIC_UUID = UUID.fromString("0000ffe2-0000-1000-8000-00805f9b34fb")
 
         const val ALERT_COMMAND = 0x01.toByte()
         const val ALERT_STOP_COMMAND = 0x00.toByte()
-        // 断连报警配置命令
         const val DISCONNECT_ALARM_ENABLE = 0x01.toByte()
         const val DISCONNECT_ALARM_DISABLE = 0x00.toByte()
     }
@@ -64,7 +61,7 @@ class BleManager @Inject constructor(
     private var customCharacteristic: BluetoothGattCharacteristic? = null
     private var disconnectAlarmCharacteristic: BluetoothGattCharacteristic? = null
 
-    // ==================== 核心修复：BLE写入队列，防止命令冲突丢失 ====================
+    // BLE写入队列
     private data class WriteRequest(
         val characteristic: BluetoothGattCharacteristic,
         val value: ByteArray
@@ -72,9 +69,11 @@ class BleManager @Inject constructor(
     private val writeQueue = mutableListOf<WriteRequest>()
     private var isWriting = false
 
-    // 核心修复：缓存待写入的断连报警配置
-    private var pendingDisconnectAlarmState: Boolean? = null
+    // 核心修复：写入超时机制，防止队列永久卡住
+    private var writeTimeoutRunnable: Runnable? = null
+    private const val WRITE_TIMEOUT_MS = 5000L
 
+    private var pendingDisconnectAlarmState: Boolean? = null
     private var deviceMacToConnect: String? = null
 
     private val _connectionState = MutableStateFlow<BleConnectionState>(BleConnectionState.Disconnected)
@@ -90,22 +89,13 @@ class BleManager @Inject constructor(
     val bleEvents: SharedFlow<BleEvent> = _bleEvents.asSharedFlow()
 
     private val managerScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // ==================== 核心修复：实例变量（非静态），生命周期跟随连接 ====================
+    // 双击检测状态
     private var lastClickTime = 0L
     private var lastDoubleClickTime = 0L
-    // 新增：超时清零任务，防止单击状态永久保留
     private var clickTimeoutRunnable: Runnable? = null
-    // ===================================================================================
 
-    // ==================== 新增：统一决策防丢器断连报警配置 ====================
-
-    /**
-     * 判断当前是否应该开启防丢器的"断连自动报警"功能
-     * 优先级：WiFi勿扰 > 定时勿扰 > 断连自动报警开关
-     */
     fun shouldEnableDeviceDisconnectAlarm(
         isWifiDndEnabled: Boolean,
         isWifiConnected: Boolean,
@@ -113,27 +103,11 @@ class BleManager @Inject constructor(
         isInDndTimeRange: Boolean,
         isDisconnectAlarmEnabled: Boolean
     ): Boolean {
-        // 1. WiFi勿扰最高优先级：开启且当前已连接WiFi → 防丢器不报警
-        if (isWifiDndEnabled && isWifiConnected) {
-            Log.d(TAG, "决策结果：WiFi勿扰生效，防丢器断连报警禁用")
-            return false
-        }
-
-        // 2. 定时勿扰：开启且当前处于勿扰时段 → 防丢器不报警
-        if (isScheduleDndEnabled && isInDndTimeRange) {
-            Log.d(TAG, "决策结果：定时勿扰生效，防丢器断连报警禁用")
-            return false
-        }
-
-        // 3. 最后由"断连自动报警"开关决定
-        Log.d(TAG, "决策结果：由断连报警开关决定=$isDisconnectAlarmEnabled")
+        if (isWifiDndEnabled && isWifiConnected) return false
+        if (isScheduleDndEnabled && isInDndTimeRange) return false
         return isDisconnectAlarmEnabled
     }
 
-    /**
-     * 向防丢器同步当前的断连报警配置
-     * 在设置变化、WiFi变化、时间变化时调用
-     */
     fun syncDeviceDisconnectAlarmConfig(
         isWifiDndEnabled: Boolean,
         isWifiConnected: Boolean,
@@ -142,16 +116,13 @@ class BleManager @Inject constructor(
         isDisconnectAlarmEnabled: Boolean
     ) {
         val shouldEnable = shouldEnableDeviceDisconnectAlarm(
-            isWifiDndEnabled,
-            isWifiConnected,
-            isScheduleDndEnabled,
-            isInDndTimeRange,
-            isDisconnectAlarmEnabled
+            isWifiDndEnabled, isWifiConnected, isScheduleDndEnabled,
+            isInDndTimeRange, isDisconnectAlarmEnabled
         )
         setDisconnectAlarmEnabled(shouldEnable)
     }
 
-    // ==================== 核心修复：BLE写入队列管理 ====================
+    // ==================== 核心修复：带超时的写入队列 ====================
     private fun queueWrite(characteristic: BluetoothGattCharacteristic, value: ByteArray) {
         writeQueue.add(WriteRequest(characteristic, value))
         if (!isWriting) {
@@ -162,6 +133,7 @@ class BleManager @Inject constructor(
     private fun processWriteQueue() {
         if (writeQueue.isEmpty()) {
             isWriting = false
+            cancelWriteTimeout()
             return
         }
         val gatt = bluetoothGatt
@@ -169,6 +141,7 @@ class BleManager @Inject constructor(
             Log.w(TAG, "GATT未连接，清空写入队列(${writeQueue.size}个)")
             writeQueue.clear()
             isWriting = false
+            cancelWriteTimeout()
             return
         }
         isWriting = true
@@ -177,35 +150,51 @@ class BleManager @Inject constructor(
         request.characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
         val success = gatt.writeCharacteristic(request.characteristic)
         if (!success) {
-            Log.e(TAG, "writeCharacteristic返回false，1ms后重试下一个")
-            mainHandler.postDelayed({ processWriteQueue() }, 1)
+            Log.e(TAG, "writeCharacteristic返回false，100ms后重试")
+            mainHandler.postDelayed({ processWriteQueue() }, 100)
         } else {
             Log.d(TAG, "已发送写入请求: ${request.characteristic.uuid}, 队列剩余: ${writeQueue.size}")
+            scheduleWriteTimeout()
         }
     }
+
+    private fun scheduleWriteTimeout() {
+        cancelWriteTimeout()
+        val runnable = Runnable {
+            if (isWriting) {
+                Log.w(TAG, "写入超时(${WRITE_TIMEOUT_MS}ms)，强制重置队列状态")
+                isWriting = false
+                if (writeQueue.isNotEmpty()) {
+                    processWriteQueue()
+                }
+            }
+        }
+        writeTimeoutRunnable = runnable
+        mainHandler.postDelayed(runnable, WRITE_TIMEOUT_MS)
+    }
+
+    private fun cancelWriteTimeout() {
+        writeTimeoutRunnable?.let {
+            mainHandler.removeCallbacks(it)
+            writeTimeoutRunnable = null
+        }
+    }
+    // =================================================================
 
     private val bleCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             Log.d(TAG, "Connection state changed: $status, newState: $newState")
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    // ==================== 核心修复：连接成功后重置点击计时器 ====================
                     resetClickState()
-                    Log.d(TAG, "连接成功，重置双击计时器")
-                    // ========================================================================
-
                     _connectionState.value = BleConnectionState.Connected
                     bluetoothGatt = gatt
                     gatt.discoverServices()
                     startRssiPolling()
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
-                    // ==================== 核心修复：断连时也重置计时器，确保下次从零开始 ====================
                     resetClickState()
-                    Log.d(TAG, "设备断开，重置双击计时器")
-                    // ===================================================================================
-
-                    Log.d(TAG, "设备已断开，准备自动重连...")
+                    cancelWriteTimeout()
                     _connectionState.value = BleConnectionState.Disconnected
                     bluetoothGatt = null
                     alertCharacteristic = null
@@ -213,29 +202,16 @@ class BleManager @Inject constructor(
                     customCharacteristic = null
                     disconnectAlarmCharacteristic = null
                     pendingDisconnectAlarmState = null
-                    // 断连后清空写入队列
                     writeQueue.clear()
                     isWriting = false
-
                     rssiPollingJob?.cancel()
                     rssiPollingJob = null
-
                     managerScope.launch {
-                        try {
-                            _bleEvents.emit(BleEvent.Disconnected)
-                        } catch (e: Exception) {
-                            Log.e(TAG, "发送断连事件失败", e)
-                        }
+                        try { _bleEvents.emit(BleEvent.Disconnected) } catch (e: Exception) {}
                     }
-
                     deviceMacToConnect?.let { mac ->
                         mainHandler.postDelayed({
-                            try {
-                                Log.d(TAG, "开始自动重连设备：$mac")
-                                scheduleReconnect(mac)
-                            } catch (e: Exception) {
-                                Log.e(TAG, "自动重连失败", e)
-                            }
+                            try { scheduleReconnect(mac) } catch (e: Exception) {}
                         }, 3000)
                     }
                 }
@@ -247,10 +223,8 @@ class BleManager @Inject constructor(
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 alertCharacteristic = gatt.getService(ALERT_SERVICE_UUID)
                     ?.getCharacteristic(ALERT_LEVEL_CHARACTERISTIC_UUID)
-
                 batteryCharacteristic = gatt.getService(BATTERY_SERVICE_UUID)
                     ?.getCharacteristic(BATTERY_LEVEL_CHARACTERISTIC_UUID)
-
                 customCharacteristic = gatt.getService(CUSTOM_SERVICE_UUID)
                     ?.getCharacteristic(CUSTOM_CHARACTERISTIC_UUID)
 
@@ -261,34 +235,23 @@ class BleManager @Inject constructor(
                     }
                 }
 
-                // 核心修复：发现断连报警配置特征值
                 disconnectAlarmCharacteristic = gatt.getService(CUSTOM_SERVICE_UUID)
                     ?.getCharacteristic(DISCONNECT_ALARM_CHARACTERISTIC_UUID)
                 Log.d(TAG, "断连报警特征值: ${disconnectAlarmCharacteristic != null}")
 
-                // 核心修复：服务发现完成后，写入缓存的断连报警配置
                 pendingDisconnectAlarmState?.let { pending ->
-                    Log.d(TAG, "服务发现完成，写入缓存的断连报警配置: $pending")
                     setDisconnectAlarmEnabled(pending)
                 }
 
-                // ==================== 核心修复：延迟读取电池，避免与descriptor写入冲突 ====================
                 batteryCharacteristic?.let {
                     mainHandler.postDelayed({
-                        try {
-                            gatt.readCharacteristic(it)
-                            Log.d(TAG, "延迟读取电池电量")
-                        } catch (e: Exception) {
-                            Log.e(TAG, "延迟读取电池失败", e)
-                        }
+                        try { gatt.readCharacteristic(it) } catch (e: Exception) {}
                     }, 500)
                 }
             }
         }
 
-        // ==================== 核心修复：同时支持新版和旧版onCharacteristicRead ====================
         override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
-            Log.d(TAG, "Characteristic read(new): ${characteristic.uuid}, status: $status, value: ${value.contentToString()}")
             handleCharacteristicRead(characteristic, value, status)
         }
 
@@ -297,25 +260,14 @@ class BleManager @Inject constructor(
         override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
             @Suppress("DEPRECATION")
             val value = characteristic.value
-            Log.d(TAG, "Characteristic read(legacy): ${characteristic.uuid}, status: $status, value: ${value?.contentToString()}")
-            if (value != null) {
-                handleCharacteristicRead(characteristic, value, status)
-            }
+            if (value != null) handleCharacteristicRead(characteristic, value, status)
         }
 
         private fun handleCharacteristicRead(characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                if (characteristic.uuid == BATTERY_LEVEL_CHARACTERISTIC_UUID) {
-                    if (value.isNotEmpty()) {
-                        val battery = value[0].toInt() and 0xFF
-                        _batteryLevel.value = battery
-                        Log.d(TAG, "电池电量读取成功: $battery%")
-                    } else {
-                        Log.w(TAG, "电池电量读取返回空值")
-                    }
+            if (status == BluetoothGatt.GATT_SUCCESS && characteristic.uuid == BATTERY_LEVEL_CHARACTERISTIC_UUID) {
+                if (value.isNotEmpty()) {
+                    _batteryLevel.value = value[0].toInt() and 0xFF
                 }
-            } else {
-                Log.e(TAG, "Characteristic read failed: ${characteristic.uuid}, status: $status")
             }
         }
 
@@ -330,103 +282,72 @@ class BleManager @Inject constructor(
             onCharacteristicValueChanged(characteristic, value)
         }
 
-        // ==================== 核心修复：只保留旧版onCharacteristicWrite（参数nullable），所有API通用 ====================
-        // 注意：不要同时实现新版4参数版本，否则API33+会触发两次！
-        override fun onCharacteristicWrite(
-            gatt: BluetoothGatt?,
-            characteristic: BluetoothGattCharacteristic?,
-            status: Int
-        ) {
+        override fun onCharacteristicWrite(gatt: BluetoothGatt?, characteristic: BluetoothGattCharacteristic?, status: Int) {
             Log.d(TAG, "Characteristic write complete: ${characteristic?.uuid}, status: $status")
+            cancelWriteTimeout()
             processWriteQueue()
         }
 
-        // ==================== 核心修复：改为 i-Searching 同款双击检测逻辑 + 超时清零 ====================
+        // ==================== 核心修复：i-Searching 同款双击检测 ====================
         private fun onCharacteristicValueChanged(characteristic: BluetoothGattCharacteristic, value: ByteArray) {
-            Log.d(TAG, "Characteristic changed: ${characteristic.uuid}, value: ${value.contentToString()}")
             if (characteristic.uuid == CUSTOM_CHARACTERISTIC_UUID) {
-                // 和 i-Searching 一样：只处理 value[0] == 1 的按钮通知
-                if (value.isEmpty() || value[0] != 1.toByte()) {
-                    Log.d(TAG, "忽略非按钮通知: ${value.contentToString()}")
-                    return
-                }
+                if (value.isEmpty() || value[0] != 1.toByte()) return
 
                 val currentTime = System.currentTimeMillis()
 
-                // 冷却期：双击成功后 800ms 内不再响应（防止连续快速点击反复触发）
+                // 冷却期
                 if (currentTime - lastDoubleClickTime < DOUBLE_CLICK_COOLDOWN) {
-                    Log.d(TAG, "双击冷却期内，忽略通知")
+                    Log.d(TAG, "冷却期内，忽略")
                     return
                 }
 
                 val lastTime = lastClickTime
                 if (lastTime == 0L) {
-                    // 第一次点击：记录时间，设置超时清零任务，然后返回
+                    // 第一次点击
                     lastClickTime = currentTime
                     scheduleClickTimeout()
-                    Log.d(TAG, "第一次点击，等待第二次...")
+                    Log.d(TAG, "第一次点击")
                     return
                 }
 
                 val interval = currentTime - lastTime
-                // i-Searching 同款判断：间隔在 10ms ~ 1000ms 之间才视为有效双击
                 if (interval < DOUBLE_PRESS_TIMEOUT && interval > MIN_DOUBLE_PRESS_INTERVAL) {
-                    // 有效双击：取消超时任务，清零计时器，触发事件
+                    // 有效双击
                     cancelClickTimeout()
                     lastClickTime = 0L
                     lastDoubleClickTime = currentTime
                     managerScope.launch {
-                        try {
-                            _bleEvents.emit(BleEvent.DoubleButtonPressed)
-                            Log.d(TAG, "双击事件已 emit（间隔${interval}ms）")
-                        } catch (e: Exception) {
-                            Log.e(TAG, "发送双击事件失败", e)
-                        }
+                        try { _bleEvents.emit(BleEvent.DoubleButtonPressed) } catch (e: Exception) {}
                     }
-                    Log.d(TAG, "检测到双击事件，间隔${interval}ms")
+                    Log.d(TAG, "双击事件，间隔${interval}ms")
                 } else {
-                    // 间隔太长(>1000ms) 或 太短(<10ms，固件重复通知)
-                    // 视为新的第一次点击，刷新计时器
+                    // 太长或太短，视为新的第一次
                     cancelClickTimeout()
                     lastClickTime = currentTime
                     scheduleClickTimeout()
-                    if (interval <= MIN_DOUBLE_PRESS_INTERVAL) {
-                        Log.d(TAG, "间隔${interval}ms太短，视为固件重复通知，刷新计时器")
-                    } else {
-                        Log.d(TAG, "间隔${interval}ms超过窗口，视为新的第一次点击")
-                    }
+                    Log.d(TAG, "间隔${interval}ms，刷新为第一次")
                 }
             }
         }
-        // =================================================================================
 
         override fun onReadRemoteRssi(gatt: BluetoothGatt, rssi: Int, status: Int) {
-            Log.d(TAG, "RSSI: $rssi, status: $status")
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                _rssi.value = rssi
-            }
+            if (status == BluetoothGatt.GATT_SUCCESS) _rssi.value = rssi
         }
 
-        override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
-            Log.d(TAG, "Descriptor write: $status")
-        }
+        override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {}
     }
 
-    // ==================== 新增：单击超时清零机制 ====================
-    /**
-     * 如果超过 DOUBLE_PRESS_TIMEOUT（1000ms）没有第二次点击，
-     * 自动清零 lastClickTime，防止单击状态永久保留导致隔很久后误触
-     */
+    // 单击超时清零
     private fun scheduleClickTimeout() {
         cancelClickTimeout()
         val runnable = Runnable {
             if (lastClickTime != 0L) {
-                Log.d(TAG, "单击超时（>${DOUBLE_PRESS_TIMEOUT}ms），自动清零计时器")
+                Log.d(TAG, "单击超时，清零")
                 lastClickTime = 0L
             }
         }
         clickTimeoutRunnable = runnable
-        mainHandler.postDelayed(runnable, DOUBLE_PRESS_TIMEOUT + 100) // 多给100ms缓冲
+        mainHandler.postDelayed(runnable, DOUBLE_PRESS_TIMEOUT + 100)
     }
 
     private fun cancelClickTimeout() {
@@ -441,28 +362,13 @@ class BleManager @Inject constructor(
         lastClickTime = 0L
         lastDoubleClickTime = 0L
     }
-    // =============================================================
 
     fun initialize(): Boolean {
         try {
             val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
             bluetoothAdapter = bluetoothManager?.adapter
-
-            if (bluetoothAdapter == null) {
-                Log.e(TAG, "设备不支持蓝牙")
-                return false
-            }
-
-            if (!bluetoothAdapter!!.isEnabled) {
-                Log.w(TAG, "蓝牙未开启")
-                return false
-            }
-
-            Log.d(TAG, "蓝牙适配器初始化成功")
-            return true
+            return bluetoothAdapter != null && bluetoothAdapter!!.isEnabled
         } catch (e: Exception) {
-            Log.e(TAG, "蓝牙适配器初始化失败", e)
-            bluetoothAdapter = null
             return false
         }
     }
@@ -471,78 +377,35 @@ class BleManager @Inject constructor(
     fun connect(macAddress: String): Flow<BleConnectionState> = channelFlow {
         try {
             deviceMacToConnect = macAddress
-
             val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
-
             if (currentAdapter == null) {
-                Log.e(TAG, "设备不支持蓝牙")
                 send(BleConnectionState.Error("设备不支持蓝牙"))
                 return@channelFlow
             }
-
             if (!currentAdapter.isEnabled) {
-                Log.e(TAG, "蓝牙未开启")
                 send(BleConnectionState.Error("请先开启蓝牙"))
-
-                while (!currentAdapter.isEnabled) {
-                    kotlinx.coroutines.delay(1000)
-                }
-                Log.d(TAG, "蓝牙已开启")
+                while (!currentAdapter.isEnabled) { kotlinx.coroutines.delay(1000) }
             }
-
             bluetoothAdapter = currentAdapter
-
             _connectionState.value = BleConnectionState.Connecting
             send(BleConnectionState.Connecting)
-
-            Log.d(TAG, "开始连接设备：$macAddress")
-
             bluetoothDevice = try {
                 currentAdapter.getRemoteDevice(macAddress)
-            } catch (e: IllegalArgumentException) {
-                Log.e(TAG, "无效的 MAC 地址：$macAddress", e)
-                send(BleConnectionState.Error("无效的设备地址"))
-                return@channelFlow
-            } catch (e: SecurityException) {
-                Log.e(TAG, "缺少蓝牙连接权限", e)
-                send(BleConnectionState.Error("缺少蓝牙连接权限"))
-                return@channelFlow
-            }
-
-            try {
-                bluetoothDevice?.connectGatt(context, false, bleCallback)
-                Log.d(TAG, "GATT 连接已发起")
             } catch (e: Exception) {
-                Log.e(TAG, "连接 GATT 失败", e)
-                send(BleConnectionState.Error("连接失败：${e.message}"))
+                send(BleConnectionState.Error("无效地址"))
                 return@channelFlow
             }
-
+            bluetoothDevice?.connectGatt(context, false, bleCallback)
             launch {
-                try {
-                    while (true) {
-                        kotlinx.coroutines.delay(1000)
-                        if (bluetoothAdapter == null || !bluetoothAdapter!!.isEnabled) {
-                            Log.e(TAG, "蓝牙适配器不可用，停止 RSSI 轮询")
-                            break
-                        }
-                        if (bluetoothGatt != null) {
-                            bluetoothGatt?.readRemoteRssi()
-                        } else {
-                            Log.d(TAG, "GATT 未连接，等待重连")
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "RSSI 轮询失败", e)
+                while (true) {
+                    kotlinx.coroutines.delay(1000)
+                    if (bluetoothAdapter == null || !bluetoothAdapter!!.isEnabled) break
+                    bluetoothGatt?.readRemoteRssi()
                 }
             }
-
-            awaitClose {
-                Log.d(TAG, "Flow 取消监听")
-            }
+            awaitClose {}
         } catch (e: Exception) {
-            Log.e(TAG, "connect 方法异常", e)
-            send(BleConnectionState.Error("连接异常：${e.message}"))
+            send(BleConnectionState.Error("连接异常"))
             close()
         }
     }
@@ -551,124 +414,59 @@ class BleManager @Inject constructor(
     fun connectDirectly(macAddress: String) {
         try {
             deviceMacToConnect = macAddress
-
             val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
-
-            if (currentAdapter == null) {
-                Log.e(TAG, "设备不支持蓝牙")
-                return
-            }
-
-            if (!currentAdapter.isEnabled) {
-                Log.w(TAG, "蓝牙未开启，等待开启")
-                return
-            }
-
+            if (currentAdapter == null || !currentAdapter.isEnabled) return
             bluetoothAdapter = currentAdapter
-
             cleanupGatt()
-
             _connectionState.value = BleConnectionState.Connecting
-            Log.d(TAG, "直接连接设备：$macAddress")
-
-            bluetoothDevice = try {
-                currentAdapter.getRemoteDevice(macAddress)
-            } catch (e: IllegalArgumentException) {
-                Log.e(TAG, "无效的 MAC 地址：$macAddress", e)
-                return
-            } catch (e: SecurityException) {
-                Log.e(TAG, "缺少蓝牙连接权限", e)
-                return
-            }
-
-            try {
-                bluetoothDevice?.connectGatt(context, false, bleCallback)
-                Log.d(TAG, "GATT 直接连接已发起")
-            } catch (e: Exception) {
-                Log.e(TAG, "直接连接 GATT 失败", e)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "connectDirectly 方法异常", e)
-        }
+            bluetoothDevice = try { currentAdapter.getRemoteDevice(macAddress) } catch (e: Exception) { return }
+            bluetoothDevice?.connectGatt(context, false, bleCallback)
+        } catch (e: Exception) {}
     }
 
     private var rssiPollingJob: kotlinx.coroutines.Job? = null
 
     private fun startRssiPolling() {
         rssiPollingJob?.cancel()
-
         rssiPollingJob = GlobalScope.launch(Dispatchers.Main) {
             try {
                 while (true) {
                     kotlinx.coroutines.delay(1000)
-
-                    if (bluetoothAdapter == null || !bluetoothAdapter!!.isEnabled) {
-                        Log.e(TAG, "蓝牙适配器不可用，停止 RSSI 轮询")
-                        break
-                    }
-
-                    if (bluetoothGatt != null) {
-                        try {
-                            bluetoothGatt?.readRemoteRssi()
-                        } catch (e: Exception) {
-                            Log.e(TAG, "RSSI 读取失败", e)
-                        }
-                    } else {
-                        Log.d(TAG, "GATT 未连接，停止 RSSI 轮询")
-                        break
-                    }
+                    if (bluetoothAdapter == null || !bluetoothAdapter!!.isEnabled) break
+                    bluetoothGatt?.readRemoteRssi()
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "RSSI 轮询异常", e)
-            }
+            } catch (e: Exception) {}
         }
-        Log.d(TAG, "RSSI 轮询已启动")
     }
 
     @SuppressLint("MissingPermission")
     fun disconnect() {
         try {
             bluetoothGatt?.let { gatt ->
-                try {
-                    _connectionState.value = BleConnectionState.Disconnecting
-                    gatt.disconnect()
-                    Log.d(TAG, "GATT 断开连接")
-                } catch (e: Exception) {
-                    Log.e(TAG, "断开 GATT 连接失败", e)
-                }
-
-                try {
-                    gatt.close()
-                    Log.d(TAG, "GATT 已关闭")
-                } catch (e: Exception) {
-                    Log.e(TAG, "关闭 GATT 失败", e)
-                }
-
+                try { _connectionState.value = BleConnectionState.Disconnecting } catch (e: Exception) {}
+                try { gatt.disconnect() } catch (e: Exception) {}
+                try { gatt.close() } catch (e: Exception) {}
                 bluetoothGatt = null
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "disconnect 方法异常", e)
-        }
+        } catch (e: Exception) {}
     }
 
-    // ==================== 核心修复：使用写入队列，避免BLE命令冲突 ====================
     @SuppressLint("MissingPermission")
     fun startAlarm() {
         alertCharacteristic?.let { characteristic ->
             queueWrite(characteristic, byteArrayOf(ALERT_COMMAND))
-            Log.d(TAG, "Alarm start 已加入写入队列")
-        } ?: Log.w(TAG, "报警特征值未找到，无法启动报警")
+            Log.d(TAG, "Alarm start 入队")
+        } ?: Log.w(TAG, "报警特征值未找到")
     }
 
     @SuppressLint("MissingPermission")
     fun stopAlarm() {
         alertCharacteristic?.let { characteristic ->
             queueWrite(characteristic, byteArrayOf(ALERT_STOP_COMMAND))
-            Log.d(TAG, "Alarm stop 已加入写入队列")
-        } ?: Log.w(TAG, "报警特征值未找到，无法停止报警")
+            Log.d(TAG, "Alarm stop 入队")
+        } ?: Log.w(TAG, "报警特征值未找到")
     }
 
-    // 核心修复：配置防丢器断连报警行为（使用写入队列）
     @SuppressLint("MissingPermission")
     fun setDisconnectAlarmEnabled(enabled: Boolean) {
         disconnectAlarmCharacteristic?.let { characteristic ->
@@ -677,11 +475,10 @@ class BleManager @Inject constructor(
                 if (enabled) byteArrayOf(DISCONNECT_ALARM_ENABLE) else byteArrayOf(DISCONNECT_ALARM_DISABLE)
             )
             pendingDisconnectAlarmState = null
-            Log.d(TAG, "断连报警配置已加入写入队列: $enabled")
+            Log.d(TAG, "FFE2 入队: $enabled")
         } ?: run {
-            // 特征值未就绪，缓存状态，等服务发现后自动写入
             pendingDisconnectAlarmState = enabled
-            Log.w(TAG, "FFE2未就绪，已缓存断连报警状态: $enabled")
+            Log.w(TAG, "FFE2未就绪，缓存: $enabled")
         }
     }
 
@@ -689,92 +486,52 @@ class BleManager @Inject constructor(
     suspend fun readBatteryLevel(): Int? {
         return try {
             withContext(Dispatchers.IO) {
-                try {
-                    batteryCharacteristic?.let { characteristic ->
-                        try {
-                            bluetoothGatt?.readCharacteristic(characteristic)
-                            kotlinx.coroutines.delay(500)
-                            _batteryLevel.value
-                        } catch (e: Exception) {
-                            Log.e(TAG, "读取电池失败", e)
-                            null
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "readBatteryLevel 异常", e)
-                    null
+                batteryCharacteristic?.let { characteristic ->
+                    try {
+                        bluetoothGatt?.readCharacteristic(characteristic)
+                        kotlinx.coroutines.delay(500)
+                        _batteryLevel.value
+                    } catch (e: Exception) { null }
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "readBatteryLevel 外部异常", e)
-            null
-        }
+        } catch (e: Exception) { null }
     }
 
-    // ==================== 新增：主动读取电池电量（供外部调用） ====================
     @SuppressLint("MissingPermission")
     fun readBattery() {
         batteryCharacteristic?.let { characteristic ->
             bluetoothGatt?.let { gatt ->
-                try {
-                    gatt.readCharacteristic(characteristic)
-                    Log.d(TAG, "主动读取电池电量")
-                } catch (e: Exception) {
-                    Log.e(TAG, "主动读取电池失败", e)
-                }
+                try { gatt.readCharacteristic(characteristic) } catch (e: Exception) {}
             }
-        } ?: Log.w(TAG, "电池特征值未找到，无法读取")
+        }
     }
 
-    fun isBluetoothEnabled(): Boolean {
-        return bluetoothAdapter?.isEnabled == true
-    }
+    fun isBluetoothEnabled(): Boolean = bluetoothAdapter?.isEnabled == true
 
     private fun scheduleReconnect(mac: String) {
-        val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) 
-            as? BluetoothManager)?.adapter
-
+        val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
         if (currentAdapter != null && currentAdapter.isEnabled) {
             try {
                 bluetoothAdapter = currentAdapter
-                val device = currentAdapter.getRemoteDevice(mac)
-                device.connectGatt(context, false, bleCallback)
-                Log.d(TAG, "自动重连 GATT 已发起")
-            } catch (e: Exception) {
-                Log.e(TAG, "自动重连失败", e)
-            }
-        } else {
-            Log.e(TAG, "蓝牙未开启，等待开启后重连")
+                currentAdapter.getRemoteDevice(mac).connectGatt(context, false, bleCallback)
+            } catch (e: Exception) {}
         }
     }
 
     fun reconnectIfDisconnected() {
         val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
-
         if (deviceMacToConnect != null && currentAdapter != null && currentAdapter.isEnabled) {
             try {
                 bluetoothAdapter = currentAdapter
                 cleanupGatt()
                 connectDirectly(deviceMacToConnect!!)
-                Log.d(TAG, "蓝牙重连已发起：${deviceMacToConnect}")
-            } catch (e: Exception) {
-                Log.e(TAG, "蓝牙重连失败", e)
-            }
-        } else {
-            if (deviceMacToConnect == null) {
-                Log.d(TAG, "没有保存的设备地址，跳过重连")
-            } else if (currentAdapter == null) {
-                Log.w(TAG, "蓝牙适配器不可用，等待初始化")
-            } else {
-                Log.w(TAG, "蓝牙未开启，等待用户手动开启")
-            }
+            } catch (e: Exception) {}
         }
     }
 
     private fun cleanupGatt() {
         bluetoothGatt?.let { oldGatt ->
             try {
-                Log.d(TAG, "清理旧 GATT 资源")
                 try { oldGatt.disconnect() } catch (e: Exception) {}
                 try { oldGatt.close() } catch (e: Exception) {}
                 try {
@@ -791,9 +548,7 @@ class BleManager @Inject constructor(
                     callbackField.isAccessible = true
                     callbackField.set(oldGatt, null)
                 } catch (e: Exception) {}
-            } catch (e: Exception) {
-                Log.e(TAG, "清理 GATT 异常", e)
-            }
+            } catch (e: Exception) {}
             bluetoothGatt = null
             alertCharacteristic = null
             batteryCharacteristic = null
@@ -802,14 +557,11 @@ class BleManager @Inject constructor(
             pendingDisconnectAlarmState = null
             writeQueue.clear()
             isWriting = false
+            cancelWriteTimeout()
         }
     }
 
     suspend fun emitAlarmEvent(reason: String) {
-        try {
-            _bleEvents.emit(BleEvent.AlarmTriggered(reason))
-        } catch (e: Exception) {
-            Log.e(TAG, "发送报警事件失败", e)
-        }
+        try { _bleEvents.emit(BleEvent.AlarmTriggered(reason)) } catch (e: Exception) {}
     }
 }

@@ -25,15 +25,15 @@ import kotlinx.coroutines.launch
 
 @AndroidEntryPoint
 class HomeFragment : Fragment() {
-
+    
     private var _binding: FragmentHomeBinding? = null
     private val binding get() = _binding!!
-
+    
     private val viewModel: HomeViewModel by viewModels()
-
+    
     private var isAlarmPlaying = false
     private var alarmDialog: androidx.appcompat.app.AlertDialog? = null
-
+    
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
@@ -42,24 +42,26 @@ class HomeFragment : Fragment() {
         _binding = FragmentHomeBinding.inflate(inflater, container, false)
         return binding.root
     }
-
+    
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
         setupObservers()
         setupClickListeners()
     }
-
+    
     override fun onResume() {
         super.onResume()
         if (viewModel.phoneAlarmTriggered.value) {
+            Log.d("HomeFragment", "onResume: 检测到报警状态，显示弹窗")
             showPhoneAlarmDialog()
         }
         val currentState = viewModel.connectionState.value
         if (currentState is BleConnectionState.Disconnected) {
+            Log.d("HomeFragment", "onResume: 检测到断开状态，自动重连")
             connectToDevice()
         }
     }
-
+    
     private fun setupObservers() {
         viewLifecycleOwner.lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -69,20 +71,17 @@ class HomeFragment : Fragment() {
                         updateConnectButton(state)
                     }
                 }
-
                 launch {
                     viewModel.device.collect { device ->
                         device?.let { updateDeviceState(it) }
                     }
                 }
-
                 launch {
                     viewModel.rssi.collect { rssi ->
                         binding.tvRssi.text = "$rssi dBm"
                         updateDistance(rssi)
                     }
                 }
-
                 launch {
                     viewModel.batteryLevel.collect { level ->
                         if (level >= 0) {
@@ -92,13 +91,11 @@ class HomeFragment : Fragment() {
                         }
                     }
                 }
-
                 launch {
                     viewModel.isDeviceAlarmPlaying.collect { isPlaying ->
                         updateAlarmButton(isPlaying)
                     }
                 }
-
                 launch {
                     viewModel.phoneAlarmTriggered.collect { triggered ->
                         if (triggered) {
@@ -106,7 +103,6 @@ class HomeFragment : Fragment() {
                         }
                     }
                 }
-
                 launch {
                     viewModel.isMonitoringRunning.collect { isRunning ->
                         updateMonitorSwitch(isRunning)
@@ -115,7 +111,7 @@ class HomeFragment : Fragment() {
             }
         }
     }
-
+    
     private fun updateConnectButton(state: BleConnectionState) {
         when (state) {
             is BleConnectionState.Connected -> {
@@ -137,27 +133,24 @@ class HomeFragment : Fragment() {
             else -> {}
         }
     }
-
+    
     private fun updateMonitorSwitch(isRunning: Boolean) {
         if (binding.switchMonitor.isChecked != isRunning) {
             binding.switchMonitor.isChecked = isRunning
         }
     }
-
+    
     private fun setupClickListeners() {
         binding.btnSearchDevice.setOnClickListener {
             findNavController().navigate(R.id.action_scan)
         }
-
         binding.btnConnectDevice.setOnClickListener {
             connectToDevice()
             Snackbar.make(binding.root, "正在连接设备...", Snackbar.LENGTH_SHORT).show()
         }
-
         binding.btnAlarmDevice.setOnClickListener {
             toggleDeviceAlarm()
         }
-
         binding.switchMonitor.setOnCheckedChangeListener { _, isChecked ->
             if (isChecked) {
                 viewModel.startMonitoring()
@@ -166,12 +159,12 @@ class HomeFragment : Fragment() {
             }
         }
     }
-
+    
     private fun connectToDevice() {
         viewModel.stopPhoneAlarm()
         viewModel.connectToDevice()
     }
-
+    
     private fun toggleDeviceAlarm() {
         if (isAlarmPlaying) {
             viewModel.stopDeviceAlarm()
@@ -185,7 +178,7 @@ class HomeFragment : Fragment() {
             Snackbar.make(binding.root, "正在让防丢器响铃...", Snackbar.LENGTH_SHORT).show()
         }
     }
-
+    
     private fun updateAlarmButton(isPlaying: Boolean) {
         if (isPlaying) {
             binding.btnAlarmDevice.text = "停止报警"
@@ -195,25 +188,23 @@ class HomeFragment : Fragment() {
             binding.btnAlarmDevice.setIconResource(android.R.drawable.ic_dialog_alert)
         }
     }
-
-    // ==================== 修复：字体从 64sp 改为 24sp（两倍大小，能完整显示） ====================
+    
+    // 核心修复：弹窗消息文字改为 24sp
     private fun showPhoneAlarmDialog() {
         alarmDialog?.dismiss()
-
         val deviceName = viewModel.device.value?.name ?: "iTAG"
-
-        val messageText = SpannableString("按下防丢器按钮两次可以停止报警").apply {
-            setSpan(
-                AbsoluteSizeSpan(24, true), // 24sp，两倍大小，能完整显示
-                0,
-                length,
-                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
-            )
-        }
-
+        
+        val message = SpannableString("按下防丢器按钮两次可以停止报警")
+        message.setSpan(
+            AbsoluteSizeSpan(24, true),
+            0,
+            message.length,
+            Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
+        
         alarmDialog = MaterialAlertDialogBuilder(requireContext())
             .setTitle("[$deviceName] 正在寻找您的手机")
-            .setMessage(messageText)
+            .setMessage(message)
             .setPositiveButton("好的") { _, _ ->
                 viewModel.stopPhoneAlarm()
                 dismissAlarmDialog()
@@ -221,13 +212,12 @@ class HomeFragment : Fragment() {
             .setCancelable(false)
             .show()
     }
-    // =================================================================================
-
+    
     private fun dismissAlarmDialog() {
         alarmDialog?.dismiss()
         alarmDialog = null
     }
-
+    
     private fun updateConnectionState(state: BleConnectionState) {
         when (state) {
             is BleConnectionState.Connected -> {
@@ -249,11 +239,11 @@ class HomeFragment : Fragment() {
             else -> {}
         }
     }
-
+    
     private fun updateDeviceState(device: BleDevice) {
         binding.tvDeviceName.text = device.name
     }
-
+    
     private fun updateDistance(rssi: Int) {
         val distance = when {
             rssi > -70 -> "1 米内"
@@ -263,7 +253,7 @@ class HomeFragment : Fragment() {
         }
         binding.tvDistance.text = distance
     }
-
+    
     override fun onDestroyView() {
         dismissAlarmDialog()
         viewModel.stopPhoneAlarm()

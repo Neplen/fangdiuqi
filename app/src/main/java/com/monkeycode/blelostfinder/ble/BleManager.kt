@@ -33,6 +33,9 @@ class BleManager @Inject constructor(
         private const val MIN_DOUBLE_PRESS_INTERVAL = 10L
         private const val DOUBLE_CLICK_COOLDOWN = 800L
 
+        // 核心修复：写入超时时间，防止队列永久卡住
+        private const val WRITE_TIMEOUT_MS = 5000L
+
         const val I_DEVICE_NAME = "iTAG"
         const val I_DEVICE_MAC = "FF:FF:11:8C:4E:3B"
 
@@ -71,7 +74,6 @@ class BleManager @Inject constructor(
 
     // 核心修复：写入超时机制，防止队列永久卡住
     private var writeTimeoutRunnable: Runnable? = null
-    private const val WRITE_TIMEOUT_MS = 5000L
 
     private var pendingDisconnectAlarmState: Boolean? = null
     private var deviceMacToConnect: String? = null

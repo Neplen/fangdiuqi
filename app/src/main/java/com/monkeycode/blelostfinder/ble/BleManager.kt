@@ -69,7 +69,7 @@ class BleManager @Inject constructor(
         val characteristic: BluetoothGattCharacteristic,
         val value: ByteArray
     )
-    private val writeQueue = mutableListOf<<WriteRequest>()
+    private val writeQueue = mutableListOf<WriteRequest>()
     private var isWriting = false
     private var writeTimeoutRunnable: Runnable? = null
 

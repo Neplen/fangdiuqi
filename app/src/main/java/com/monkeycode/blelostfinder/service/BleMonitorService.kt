@@ -112,6 +112,11 @@ class BleMonitorService : Service() {
     // 新增：断连后延迟报警的协程任务
     private var pendingAlarmJob: kotlinx.coroutines.Job? = null
 
+    // ==================== 核心修复：断连报警延迟期内禁止重连 ====================
+    // 当断连后启动6秒延迟报警时，标记为true，在此期间暂停自动重连
+    // 避免重连导致connectionState抖动，干扰6秒后的报警判断
+    private var isAlarmDelayActive = false
+
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "Service created")
@@ -479,7 +484,8 @@ class BleMonitorService : Service() {
                 delay(HEARTBEAT_INTERVAL)
 
                 val connectionState = bleManager.connectionState.value
-                if (connectionState is BleConnectionState.Disconnected) {
+                // 核心修复：报警延迟期内不触发重连，避免干扰断连报警判断
+                if (connectionState is BleConnectionState.Disconnected && !isAlarmDelayActive) {
                     Log.d(TAG, "心跳检测：设备断开，触发重连")
                     bleManager.reconnectIfDisconnected()
                 }
@@ -495,6 +501,7 @@ class BleMonitorService : Service() {
         rssiMonitorJob?.cancel()
         pendingAlarmJob?.cancel()
         pendingAlarmJob = null
+        isAlarmDelayActive = false
         serviceScope.launch {
             alarmMutex.withLock {
                 stopAlarmIfPlayingLocked()
@@ -510,7 +517,10 @@ class BleMonitorService : Service() {
 
                 val connectionState = bleManager.connectionState.value
 
-                if (connectionState is BleConnectionState.Disconnected) {
+                // 核心修复：报警延迟期内不触发重连，避免干扰断连报警判断
+                // 真实断连场景下，6秒延迟期内频繁重连会导致connectionState抖动，
+                // 使得pendingAlarmJob在6秒检查时connectionState不是Disconnected，从而不报警
+                if (connectionState is BleConnectionState.Disconnected && !isAlarmDelayActive) {
                     bleManager.reconnectIfDisconnected()
                 }
             }
@@ -527,6 +537,9 @@ class BleMonitorService : Service() {
                     deviceAlarmRetriggerTime = null
                     bluetoothDisconnectedTime = null
                     lastShouldTriggerPhoneAlarm = false
+
+                    // 核心修复：连接成功后重置报警延迟标志，允许重连
+                    isAlarmDelayActive = false
 
                     // 取消待执行的延迟报警
                     pendingAlarmJob?.cancel()
@@ -565,14 +578,31 @@ class BleMonitorService : Service() {
                     bluetoothDisconnectedTime = System.currentTimeMillis()
                     lastShouldTriggerPhoneAlarm = shouldTriggerPhoneAlarm()
 
+                    // 核心修复：标记报警延迟期开始，暂停自动重连
+                    isAlarmDelayActive = true
+
                     // 核心修复：延迟6秒后触发报警，与防丢器固件同步
                     pendingAlarmJob?.cancel()
                     pendingAlarmJob = serviceScope.launch {
                         delay(DISCONNECT_ALARM_DELAY_MS)
-                        if (bleManager.connectionState.value is BleConnectionState.Disconnected) {
+
+                        // 核心修复：6秒延迟结束后，重置报警延迟标志，允许重连
+                        isAlarmDelayActive = false
+
+                        // 核心修复：使用记录的实际断连时间来判断，而不是依赖当前connectionState
+                        // 因为在6秒延迟期内，connectionState可能因为重连尝试而抖动
+                        val disconnectTime = bluetoothDisconnectedTime
+                        val currentTime = System.currentTimeMillis()
+
+                        if (disconnectTime != null && (currentTime - disconnectTime) >= DISCONNECT_ALARM_DELAY_MS) {
+                            // 检查断连后是否曾经重新连接成功过
+                            // 如果连接成功过，handleConnectionState Connected会取消pendingAlarmJob
+                            // 所以如果能执行到这里，说明6秒内没有成功重连
                             alarmMutex.withLock {
                                 if (!isAlarmPlaying && shouldTriggerPhoneAlarm()) {
                                     triggerPhoneAlarmLocked("断连报警（6秒延迟）", ignoreDnd = false)
+                                } else {
+                                    Log.d(TAG, "6秒延迟后不满足报警条件: isAlarmPlaying=$isAlarmPlaying, shouldTrigger=${shouldTriggerPhoneAlarm()}")
                                 }
                             }
                         } else {
@@ -706,7 +736,7 @@ class BleMonitorService : Service() {
 
     private fun isWifiConnected(): Boolean {
         return try {
-            val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) 
+            val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE)
                 as? android.net.ConnectivityManager
             val network = connectivityManager?.activeNetwork
             val capabilities = connectivityManager?.getNetworkCapabilities(network)

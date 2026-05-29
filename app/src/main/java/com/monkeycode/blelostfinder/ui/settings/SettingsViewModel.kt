@@ -3,6 +3,7 @@ package com.monkeycode.blelostfinder.ui.settings
 import android.app.Application
 import android.content.Context
 import android.media.RingtoneManager
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.monkeycode.blelostfinder.data.local.SettingsManager
@@ -11,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import java.io.File
 import javax.inject.Inject
@@ -21,7 +23,6 @@ class SettingsViewModel @Inject constructor(
     private val settingsManager: SettingsManager
 ) : AndroidViewModel(application) {
 
-    // 核心修复：删除 RSSI 阈值，新增断连报警开关
     private val _isDisconnectAlarmEnabled = MutableStateFlow(true)
     val isDisconnectAlarmEnabled: StateFlow<Boolean> = _isDisconnectAlarmEnabled.asStateFlow()
 
@@ -37,7 +38,6 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    // 核心修复：新增断连报警开关更新
     fun updateDisconnectAlarmEnabled(enabled: Boolean) {
         viewModelScope.launch {
             settingsManager.updateDisconnectAlarmEnabled(enabled)
@@ -65,6 +65,24 @@ class SettingsViewModel @Inject constructor(
     fun saveRingtoneUri(uriString: String) {
         viewModelScope.launch {
             settingsManager.updateAlarmRingtonePath(uriString.ifEmpty { null })
+        }
+    }
+
+    /**
+     * 获取当前保存的铃声URI，用于系统铃声选择器回显
+     */
+    fun getCurrentRingtoneUri(): Uri? {
+        val context = getApplication<Application>().applicationContext
+        return try {
+            val path = settingsManager.alarmRingtonePath.firstOrNull()
+            when {
+                path == null -> null
+                path.startsWith("content://") -> Uri.parse(path)
+                path.startsWith("file://") -> Uri.parse(path)
+                else -> Uri.fromFile(File(path))
+            }
+        } catch (e: Exception) {
+            null
         }
     }
 

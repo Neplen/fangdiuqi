@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -22,7 +23,7 @@ class SettingsManager @Inject constructor(
     companion object {
         val DEVICE_NAME = stringPreferencesKey("device_name")
         val DEVICE_MAC = stringPreferencesKey("device_mac")
-        // 断连报警开关
+        // 核心修复：删除 RSSI_THRESHOLD，新增断连报警开关
         val DISCONNECT_ALARM_ENABLED = booleanPreferencesKey("disconnect_alarm_enabled")
         val WIFI_DND_ENABLED = booleanPreferencesKey("wifi_dnd_enabled")
         val SCHEDULE_DND_ENABLED = booleanPreferencesKey("schedule_dnd_enabled")
@@ -41,17 +42,17 @@ class SettingsManager @Inject constructor(
         preferences[DEVICE_MAC] ?: "FF:FF:11:8C:4E:3B"
     }
 
-    // 断连自动报警开关，默认开启
+    // 核心修复：断连自动报警开关，默认开启
     val isDisconnectAlarmEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
         preferences[DISCONNECT_ALARM_ENABLED] ?: true
     }
 
     val isWifiDndEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
-        preferences[WIFI_DND_ENABLED] ?: false
+        preferences[WIFI_DND_ENABLED] ?: false  // 核心修复：默认关闭，避免首次安装就生效
     }
 
     val isScheduleDndEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
-        preferences[SCHEDULE_DND_ENABLED] ?: false
+        preferences[SCHEDULE_DND_ENABLED] ?: false  // 核心修复：默认关闭
     }
 
     val dndStartTime: Flow<String> = context.dataStore.data.map { preferences ->
@@ -82,7 +83,7 @@ class SettingsManager @Inject constructor(
         }
     }
 
-    // 断连报警开关更新
+    // 核心修复：新增断连报警开关更新
     suspend fun updateDisconnectAlarmEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[DISCONNECT_ALARM_ENABLED] = enabled

@@ -80,7 +80,7 @@ class SettingsFragment : Fragment() {
                     }
                 }
 
-                // 监听断连报警开关
+                // 核心修复：监听断连报警开关
                 launch {
                     viewModel.isDisconnectAlarmEnabled.collect { enabled ->
                         binding.switchDisconnectAlarm.isChecked = enabled
@@ -115,7 +115,7 @@ class SettingsFragment : Fragment() {
     }
 
     private fun setupClickListeners() {
-        // 断连报警开关
+        // 核心修复：断连报警开关
         binding.switchDisconnectAlarm.setOnCheckedChangeListener { _, isChecked ->
             viewModel.updateDisconnectAlarmEnabled(isChecked)
         }

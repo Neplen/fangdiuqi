@@ -3,6 +3,7 @@
     <string name="app_name">BLE 防丢器</string>
     <string name="device_name_hint">设备名称</string>
     <string name="rssi_threshold_hint">RSSI 阈值 (dBm)</string>
+    <string name="alarm_delay_hint">报警延迟 (秒)</string>
     <string name="alarm_ringtone">报警铃声</string>
     <string name="wifi_dnd_mode">WIFI 勿扰模式</string>
     <string name="schedule_dnd_mode">定时勿扰模式</string>

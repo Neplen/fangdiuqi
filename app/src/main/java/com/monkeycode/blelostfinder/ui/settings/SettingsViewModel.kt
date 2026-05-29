@@ -21,7 +21,7 @@ class SettingsViewModel @Inject constructor(
     private val settingsManager: SettingsManager
 ) : AndroidViewModel(application) {
 
-    // 断连报警开关
+    // 核心修复：删除 RSSI 阈值，新增断连报警开关
     private val _isDisconnectAlarmEnabled = MutableStateFlow(true)
     val isDisconnectAlarmEnabled: StateFlow<Boolean> = _isDisconnectAlarmEnabled.asStateFlow()
 
@@ -37,7 +37,7 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    // 断连报警开关更新
+    // 核心修复：新增断连报警开关更新
     fun updateDisconnectAlarmEnabled(enabled: Boolean) {
         viewModelScope.launch {
             settingsManager.updateDisconnectAlarmEnabled(enabled)

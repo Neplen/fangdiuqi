@@ -59,7 +59,7 @@
             android:textColor="@color/text_primary"
             android:layout_marginBottom="12dp" />
 
-        <!-- 断连自动报警开关 -->
+        <!-- 核心修复：断连自动报警开关，替换原来的 RSSI 阈值 -->
         <com.google.android.material.switchmaterial.SwitchMaterial
             android:id="@+id/switch_disconnect_alarm"
             android:layout_width="match_parent"
@@ -67,7 +67,7 @@
             android:text="断连自动报警"
             android:textSize="14sp"
             android:checked="true"
-            android:layout_marginBottom="16dp" />
+            android:layout_marginBottom="12dp" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btn_ringtone"

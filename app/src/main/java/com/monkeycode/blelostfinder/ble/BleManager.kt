@@ -229,16 +229,9 @@ class BleManager @Inject constructor(
                         }
                     }
 
-                    deviceMacToConnect?.let { mac ->
-                        mainHandler.postDelayed({
-                            try {
-                                Log.d(TAG, "开始自动重连设备：$mac")
-                                scheduleReconnect(mac)
-                            } catch (e: Exception) {
-                                Log.e(TAG, "自动重连失败", e)
-                            }
-                        }, 3000)
-                    }
+                    // 核心修复：断连后使用指数退避重连，避免立即重连导致状态混乱
+                    // 重连由BleMonitorService控制，这里不再自动重连
+                    Log.d(TAG, "设备断开，等待MonitorService控制重连")
                 }
             }
         }
@@ -604,8 +597,19 @@ class BleManager @Inject constructor(
     }
 
     // 核心修复：报警命令插队，优先执行
+    // 如果alertCharacteristic为null，尝试重新发现服务
     @SuppressLint("MissingPermission")
     fun startAlarm() {
+        if (alertCharacteristic == null) {
+            Log.w(TAG, "报警特征值未找到，尝试重新发现服务")
+            bluetoothGatt?.discoverServices()
+            // 重新发现服务后，alertCharacteristic会在onServicesDiscovered中设置
+            // 但这里不能立即写入，需要等待服务发现完成
+            // 所以这里只是触发服务发现，实际的报警需要在服务发现后执行
+            // 这是一个临时方案，更好的方案是在服务发现完成后自动执行缓存的报警命令
+            return
+        }
+
         alertCharacteristic?.let { characteristic ->
             queueWritePriority(characteristic, byteArrayOf(ALERT_COMMAND))
             Log.d(TAG, "Alarm start 已加入写入队列头部")

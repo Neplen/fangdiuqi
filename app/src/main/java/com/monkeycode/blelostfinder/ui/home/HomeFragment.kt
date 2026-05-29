@@ -31,7 +31,9 @@ class HomeFragment : Fragment() {
 
     private val viewModel: HomeViewModel by viewModels()
 
-    private var isAlarmPlaying = false
+    // 核心修复：不再自己维护isAlarmPlaying，完全从ViewModel获取
+    // 本地只用于UI按钮状态，实际命令发送不依赖此值
+    private var isDeviceAlarmPlaying = false
     private var alarmDialog: androidx.appcompat.app.AlertDialog? = null
 
     override fun onCreateView(
@@ -93,6 +95,8 @@ class HomeFragment : Fragment() {
                 }
                 launch {
                     viewModel.isDeviceAlarmPlaying.collect { isPlaying ->
+                        // 核心修复：从ViewModel同步报警状态，不依赖本地变量
+                        isDeviceAlarmPlaying = isPlaying
                         updateAlarmButton(isPlaying)
                     }
                 }
@@ -165,16 +169,16 @@ class HomeFragment : Fragment() {
         viewModel.connectToDevice()
     }
 
+    // 核心修复：toggleDeviceAlarm不再依赖本地状态，而是发送toggle命令
+    // 由ViewModel/BleManager维护真实状态
     private fun toggleDeviceAlarm() {
-        if (isAlarmPlaying) {
+        if (isDeviceAlarmPlaying) {
+            // 停止报警
             viewModel.stopDeviceAlarm()
-            isAlarmPlaying = false
-            updateAlarmButton(false)
             Snackbar.make(binding.root, "已停止报警", Snackbar.LENGTH_SHORT).show()
         } else {
+            // 启动报警
             viewModel.startDeviceAlarm()
-            isAlarmPlaying = true
-            updateAlarmButton(true)
             Snackbar.make(binding.root, "正在让防丢器响铃...", Snackbar.LENGTH_SHORT).show()
         }
     }

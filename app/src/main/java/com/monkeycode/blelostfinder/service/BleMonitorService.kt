@@ -48,8 +48,10 @@ class BleMonitorService : Service() {
         private const val ACTION_STOP_MONITORING = "com.monkeycode.blelostfinder.STOP_MONITORING"
         const val ACTION_STOP_PHONE_ALARM = "com.monkeycode.blelostfinder.STOP_PHONE_ALARM"
 
-        // 固定6秒延迟，与防丢器固件同步
-        private const val DISCONNECT_ALARM_DELAY_MS = 6000L
+        // 核心修复：取消6秒延迟，手机端检测到断连后立即报警
+        // 防丢器固件已有6秒硬编码延迟，手机端不需要再叠加
+        // 加1秒防抖避免蓝牙底层瞬间抖动
+        private const val DISCONNECT_DEBOUNCE_MS = 1000L
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
@@ -109,13 +111,15 @@ class BleMonitorService : Service() {
     // 核心修复：记录上次实际同步给防丢器的配置，避免重复写入
     private var lastSyncedDisconnectAlarmState: Boolean? = null
 
-    // 新增：断连后延迟报警的协程任务
-    private var pendingAlarmJob: kotlinx.coroutines.Job? = null
+    // 核心修复：断连防抖协程任务（替代之前的6秒延迟）
+    private var disconnectDebounceJob: kotlinx.coroutines.Job? = null
 
-    // ==================== 核心修复：断连报警延迟期内禁止重连 ====================
-    // 当断连后启动6秒延迟报警时，标记为true，在此期间暂停自动重连
-    // 避免重连导致connectionState抖动，干扰6秒后的报警判断
-    private var isAlarmDelayActive = false
+    // 核心修复：防止断连后重复报警（用户停止后不再重复触发）
+    private var hasAlarmBeenTriggeredForCurrentDisconnect = false
+
+    // 核心修复：指数退避重连
+    private var reconnectAttemptCount = 0
+    private val MAX_RECONNECT_DELAY_MS = 30000L
 
     override fun onCreate() {
         super.onCreate()
@@ -178,8 +182,8 @@ class BleMonitorService : Service() {
         releaseWakeLock()
         heartbeatJob?.cancel()
         heartbeatJob = null
-        pendingAlarmJob?.cancel()
-        pendingAlarmJob = null
+        disconnectDebounceJob?.cancel()
+        disconnectDebounceJob = null
         serviceScope.cancel()
         _isRunning.value = false
         super.onDestroy()
@@ -309,7 +313,7 @@ class BleMonitorService : Service() {
         if (!lastShouldTriggerPhoneAlarm && currentShouldTrigger && bluetoothDisconnectedTime != null) {
             serviceScope.launch {
                 alarmMutex.withLock {
-                    if (!isAlarmPlaying) {
+                    if (!isAlarmPlaying && !hasAlarmBeenTriggeredForCurrentDisconnect) {
                         Log.d(TAG, "策略条件变化，触发补偿报警")
                         triggerPhoneAlarmLocked("断连报警（补偿）", ignoreDnd = false)
                     }
@@ -484,10 +488,15 @@ class BleMonitorService : Service() {
                 delay(HEARTBEAT_INTERVAL)
 
                 val connectionState = bleManager.connectionState.value
-                // 核心修复：报警延迟期内不触发重连，避免干扰断连报警判断
-                if (connectionState is BleConnectionState.Disconnected && !isAlarmDelayActive) {
-                    Log.d(TAG, "心跳检测：设备断开，触发重连")
-                    bleManager.reconnectIfDisconnected()
+                if (connectionState is BleConnectionState.Disconnected) {
+                    // 使用指数退避重连，避免频繁重连导致状态混乱
+                    val reconnectDelay = calculateReconnectDelay()
+                    Log.d(TAG, "心跳检测：设备断开，${reconnectDelay}ms后尝试重连")
+                    delay(reconnectDelay)
+                    if (bleManager.connectionState.value is BleConnectionState.Disconnected) {
+                        bleManager.reconnectIfDisconnected()
+                        reconnectAttemptCount++
+                    }
                 }
 
                 notificationManager.notify(NOTIFICATION_ID, createNotification())
@@ -496,12 +505,18 @@ class BleMonitorService : Service() {
         Log.d(TAG, "心跳机制已启动")
     }
 
+    // 核心修复：指数退避计算重连延迟
+    private fun calculateReconnectDelay(): Long {
+        val baseDelay = 3000L
+        val delay = baseDelay * (1 shl reconnectAttemptCount.coerceAtMost(5))
+        return delay.coerceAtMost(MAX_RECONNECT_DELAY_MS)
+    }
+
     private fun stopMonitoring() {
         isMonitoring = false
         rssiMonitorJob?.cancel()
-        pendingAlarmJob?.cancel()
-        pendingAlarmJob = null
-        isAlarmDelayActive = false
+        disconnectDebounceJob?.cancel()
+        disconnectDebounceJob = null
         serviceScope.launch {
             alarmMutex.withLock {
                 stopAlarmIfPlayingLocked()
@@ -516,16 +531,16 @@ class BleMonitorService : Service() {
                 delay(1000)
 
                 val connectionState = bleManager.connectionState.value
-
-                // 核心修复：报警延迟期内不触发重连，避免干扰断连报警判断
-                // 真实断连场景下，6秒延迟期内频繁重连会导致connectionState抖动，
-                // 使得pendingAlarmJob在6秒检查时connectionState不是Disconnected，从而不报警
-                if (connectionState is BleConnectionState.Disconnected && !isAlarmDelayActive) {
-                    bleManager.reconnectIfDisconnected()
+                if (connectionState is BleConnectionState.Disconnected) {
+                    // 使用指数退避，避免每秒都重连
+                    if (reconnectAttemptCount < 3) {
+                        bleManager.reconnectIfDisconnected()
+                        reconnectAttemptCount++
+                    }
                 }
             }
         }
-        Log.d(TAG, "RSSI 监控已启动（简化版）")
+        Log.d(TAG, "RSSI 监控已启动（指数退避重连）")
     }
 
     private fun handleConnectionState(state: BleConnectionState) {
@@ -538,12 +553,13 @@ class BleMonitorService : Service() {
                     bluetoothDisconnectedTime = null
                     lastShouldTriggerPhoneAlarm = false
 
-                    // 核心修复：连接成功后重置报警延迟标志，允许重连
-                    isAlarmDelayActive = false
+                    // 核心修复：连接成功后重置所有断连相关标志
+                    hasAlarmBeenTriggeredForCurrentDisconnect = false
+                    reconnectAttemptCount = 0
 
-                    // 取消待执行的延迟报警
-                    pendingAlarmJob?.cancel()
-                    pendingAlarmJob = null
+                    // 取消待执行的断连防抖
+                    disconnectDebounceJob?.cancel()
+                    disconnectDebounceJob = null
 
                     // 连接成功后强制重置同步状态，确保FFE2配置一定会被写入
                     lastSyncedDisconnectAlarmState = null
@@ -578,35 +594,30 @@ class BleMonitorService : Service() {
                     bluetoothDisconnectedTime = System.currentTimeMillis()
                     lastShouldTriggerPhoneAlarm = shouldTriggerPhoneAlarm()
 
-                    // 核心修复：标记报警延迟期开始，暂停自动重连
-                    isAlarmDelayActive = true
+                    // 核心修复：如果本次断连已经触发过报警，不再重复触发
+                    if (hasAlarmBeenTriggeredForCurrentDisconnect) {
+                        Log.d(TAG, "本次断连已触发过报警，跳过")
+                        return@launch
+                    }
 
-                    // 核心修复：延迟6秒后触发报警，与防丢器固件同步
-                    pendingAlarmJob?.cancel()
-                    pendingAlarmJob = serviceScope.launch {
-                        delay(DISCONNECT_ALARM_DELAY_MS)
+                    // 核心修复：使用1秒防抖替代6秒延迟，检测到断连后立即报警
+                    // 防丢器固件已有6秒硬编码延迟，手机端不需要再叠加
+                    disconnectDebounceJob?.cancel()
+                    disconnectDebounceJob = serviceScope.launch {
+                        delay(DISCONNECT_DEBOUNCE_MS)
 
-                        // 核心修复：6秒延迟结束后，重置报警延迟标志，允许重连
-                        isAlarmDelayActive = false
-
-                        // 核心修复：使用记录的实际断连时间来判断，而不是依赖当前connectionState
-                        // 因为在6秒延迟期内，connectionState可能因为重连尝试而抖动
-                        val disconnectTime = bluetoothDisconnectedTime
-                        val currentTime = System.currentTimeMillis()
-
-                        if (disconnectTime != null && (currentTime - disconnectTime) >= DISCONNECT_ALARM_DELAY_MS) {
-                            // 检查断连后是否曾经重新连接成功过
-                            // 如果连接成功过，handleConnectionState Connected会取消pendingAlarmJob
-                            // 所以如果能执行到这里，说明6秒内没有成功重连
+                        // 1秒防抖后，如果仍然断开，立即报警
+                        if (bleManager.connectionState.value is BleConnectionState.Disconnected) {
                             alarmMutex.withLock {
-                                if (!isAlarmPlaying && shouldTriggerPhoneAlarm()) {
-                                    triggerPhoneAlarmLocked("断连报警（6秒延迟）", ignoreDnd = false)
+                                if (!isAlarmPlaying && shouldTriggerPhoneAlarm() && !hasAlarmBeenTriggeredForCurrentDisconnect) {
+                                    triggerPhoneAlarmLocked("断连报警", ignoreDnd = false)
+                                    hasAlarmBeenTriggeredForCurrentDisconnect = true
                                 } else {
-                                    Log.d(TAG, "6秒延迟后不满足报警条件: isAlarmPlaying=$isAlarmPlaying, shouldTrigger=${shouldTriggerPhoneAlarm()}")
+                                    Log.d(TAG, "1秒防抖后不满足报警条件: isAlarmPlaying=$isAlarmPlaying, shouldTrigger=${shouldTriggerPhoneAlarm()}, hasTriggered=$hasAlarmBeenTriggeredForCurrentDisconnect")
                                 }
                             }
                         } else {
-                            Log.d(TAG, "设备在延迟期内已重连，取消报警")
+                            Log.d(TAG, "1秒防抖期内已重连，取消报警")
                         }
                     }
                 }

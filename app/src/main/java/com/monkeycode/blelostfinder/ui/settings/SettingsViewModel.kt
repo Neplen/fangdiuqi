@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import java.io.File
 import javax.inject.Inject
 
@@ -70,11 +71,14 @@ class SettingsViewModel @Inject constructor(
 
     /**
      * 获取当前保存的铃声URI，用于系统铃声选择器回显
+     * 使用 runBlocking 在同步上下文中读取 Flow 的第一个值
      */
     fun getCurrentRingtoneUri(): Uri? {
         val context = getApplication<Application>().applicationContext
         return try {
-            val path = settingsManager.alarmRingtonePath.firstOrNull()
+            val path = runBlocking {
+                settingsManager.alarmRingtonePath.firstOrNull()
+            }
             when {
                 path == null -> null
                 path.startsWith("content://") -> Uri.parse(path)

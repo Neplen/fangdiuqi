@@ -320,6 +320,7 @@ class BleMonitorService : Service() {
                 try {
                     deviceRepository.getDeviceByMac(deviceMac)?.let { device ->
                         currentDevice = device
+                        Log.d(TAG, "加载设备配置完成")
                     } ?: run {
                         val defaultDevice = BleDevice(
                             macAddress = deviceMac,

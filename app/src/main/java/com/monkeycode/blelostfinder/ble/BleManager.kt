@@ -29,7 +29,8 @@ class BleManager @Inject constructor(
         private const val TAG = "BleManager"
 
         private const val DOUBLE_PRESS_TIMEOUT = 2000L
-        private var lastButtonPressTime = 0L
+        // 修复1：初始值改为 -1，表示"从未按过"
+        private var lastButtonPressTime = -1L
 
         private var lastDoubleClickTime = 0L
         private const val DOUBLE_CLICK_COOLDOWN = 800L
@@ -190,6 +191,15 @@ class BleManager @Inject constructor(
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.d(TAG, "设备已断开，准备自动重连...")
                     _connectionState.value = BleConnectionState.Disconnected
+
+                    // 修复2：断开时必须先close()释放原生资源，否则会导致蓝牙底层阻塞
+                    try {
+                        gatt.close()
+                        Log.d(TAG, "GATT已关闭，释放原生资源")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "关闭GATT异常", e)
+                    }
+
                     bluetoothGatt = null
                     alertCharacteristic = null
                     batteryCharacteristic = null
@@ -303,7 +313,7 @@ class BleManager @Inject constructor(
         }
 
         @Deprecated("Deprecated in API 33")
-        override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+ override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             @Suppress("DEPRECATION")
             val value = characteristic.value
             onCharacteristicValueChanged(characteristic, value)
@@ -334,8 +344,14 @@ class BleManager @Inject constructor(
                     return
                 }
 
-                if (currentTime - lastButtonPressTime < DOUBLE_PRESS_TIMEOUT) {
-                    lastButtonPressTime = 0
+                // 修复1：首次按下（lastButtonPressTime == -1）或超过超时时间，都视为"第一次点击"
+                if (lastButtonPressTime == -1L || currentTime - lastButtonPressTime >= DOUBLE_PRESS_TIMEOUT) {
+                    // 这是第一次点击，记录时间，什么都不做
+                    lastButtonPressTime = currentTime
+                    Log.d(TAG, "检测到第一次点击，等待第二次...")
+                } else {
+                    // 在超时时间内收到第二次点击 → 确认为双击
+                    lastButtonPressTime = -1L  // 重置，准备下一次双击检测
                     lastDoubleClickTime = currentTime
 
                     managerScope.launch {
@@ -347,9 +363,6 @@ class BleManager @Inject constructor(
                         }
                     }
                     Log.d(TAG, "检测到双击事件")
-                } else {
-                    lastButtonPressTime = currentTime
-                    Log.d(TAG, "检测到单击事件，等待第二次点击")
                 }
             }
         }

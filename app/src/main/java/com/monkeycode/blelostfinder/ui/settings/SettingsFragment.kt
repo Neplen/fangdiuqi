@@ -40,17 +40,34 @@ class SettingsFragment : Fragment() {
 
     companion object {
         private const val TAG = "SettingsFragment"
-        private const val REQUEST_CODE_PICK_RINGTONE = 1001
     }
 
-    private val ringtonePickerLauncher = registerForActivityResult(
+    // 本地音频文件选择器
+    private val filePickerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
             result.data?.data?.let { uri ->
                 viewModel.saveRingtoneUri(uri.toString())
                 previewRingtone(uri)
-                Toast.makeText(requireContext(), "已选择铃声", Toast.LENGTH_SHORT).show()
+                Toast.makeText(requireContext(), "已选择本地铃声", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // 系统铃声选择器（新增）
+    private val systemRingtonePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            @Suppress("DEPRECATION")
+            val uri = result.data?.getParcelableExtra<Uri>(RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+            uri?.let {
+                viewModel.saveRingtoneUri(it.toString())
+                previewRingtone(it)
+                Toast.makeText(requireContext(), "已选择系统铃声", Toast.LENGTH_SHORT).show()
+            } ?: run {
+                Toast.makeText(requireContext(), "未选择铃声", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -80,7 +97,6 @@ class SettingsFragment : Fragment() {
                     }
                 }
 
-                // 核心修复：监听断连报警开关
                 launch {
                     viewModel.isDisconnectAlarmEnabled.collect { enabled ->
                         binding.switchDisconnectAlarm.isChecked = enabled
@@ -115,7 +131,6 @@ class SettingsFragment : Fragment() {
     }
 
     private fun setupClickListeners() {
-        // 核心修复：断连报警开关
         binding.switchDisconnectAlarm.setOnCheckedChangeListener { _, isChecked ->
             viewModel.updateDisconnectAlarmEnabled(isChecked)
         }
@@ -183,7 +198,7 @@ class SettingsFragment : Fragment() {
         val options = arrayOf(
             "报警声",
             "选择本地铃声文件",
-            "使用系统默认铃声"
+            "在系统铃声中选择"
         )
 
         MaterialAlertDialogBuilder(requireContext())
@@ -197,10 +212,7 @@ class SettingsFragment : Fragment() {
                         Toast.makeText(requireContext(), "已选择报警声", Toast.LENGTH_SHORT).show()
                     }
                     1 -> openFilePicker()
-                    2 -> {
-                        viewModel.saveRingtoneUri("")
-                        Toast.makeText(requireContext(), "已选择系统默认铃声", Toast.LENGTH_SHORT).show()
-                    }
+                    2 -> openSystemRingtonePicker()
                 }
                 dialog.dismiss()
             }
@@ -214,7 +226,16 @@ class SettingsFragment : Fragment() {
             type = "audio/*"
             putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("audio/mp3", "audio/wav", "audio/mpeg", "audio/ogg"))
         }
-        ringtonePickerLauncher.launch(intent)
+        filePickerLauncher.launch(intent)
+    }
+
+    // 新增：打开系统闹钟铃声选择器
+    private fun openSystemRingtonePicker() {
+        val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+            putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM)
+            putExtra(RingtoneManager.EXTRA_RINGTONE_TITLE, "选择报警铃声")
+        }
+        systemRingtonePickerLauncher.launch(intent)
     }
 
     private fun previewRingtone(uri: Uri) {

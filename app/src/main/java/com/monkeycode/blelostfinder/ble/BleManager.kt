@@ -28,10 +28,10 @@ class BleManager @Inject constructor(
     companion object {
         private const val TAG = "BleManager"
 
-        private const val DOUBLE_PRESS_TIMEOUT = 2000L
-        // 修复1：初始值改为 -1，表示"从未按过"
+        // 核心修复：与 i-Searching 保持一致，双击超时改为 1000ms
+        // 原 2000ms 过长，增加误触概率
+        private const val DOUBLE_PRESS_TIMEOUT = 1000L
         private var lastButtonPressTime = -1L
-
         private var lastDoubleClickTime = 0L
         private const val DOUBLE_CLICK_COOLDOWN = 800L
 
@@ -47,12 +47,10 @@ class BleManager @Inject constructor(
         val CUSTOM_SERVICE_UUID = UUID.fromString("0000ffe0-0000-1000-8000-00805f9b34fb")
         val CUSTOM_CHARACTERISTIC_UUID = UUID.fromString("0000ffe1-0000-1000-8000-00805f9b34fb")
 
-        // 核心修复：新增断连报警配置特征值（i-Searching 同款）
         val DISCONNECT_ALARM_CHARACTERISTIC_UUID = UUID.fromString("0000ffe2-0000-1000-8000-00805f9b34fb")
 
         const val ALERT_COMMAND = 0x01.toByte()
         const val ALERT_STOP_COMMAND = 0x00.toByte()
-        // 断连报警配置命令
         const val DISCONNECT_ALARM_ENABLE = 0x01.toByte()
         const val DISCONNECT_ALARM_DISABLE = 0x00.toByte()
     }
@@ -65,7 +63,6 @@ class BleManager @Inject constructor(
     private var customCharacteristic: BluetoothGattCharacteristic? = null
     private var disconnectAlarmCharacteristic: BluetoothGattCharacteristic? = null
 
-    // ==================== 核心修复：BLE写入队列，防止命令冲突丢失 ====================
     private data class WriteRequest(
         val characteristic: BluetoothGattCharacteristic,
         val value: ByteArray
@@ -73,7 +70,6 @@ class BleManager @Inject constructor(
     private val writeQueue = mutableListOf<WriteRequest>()
     private var isWriting = false
 
-    // 核心修复：缓存待写入的断连报警配置
     private var pendingDisconnectAlarmState: Boolean? = null
 
     private var deviceMacToConnect: String? = null
@@ -94,12 +90,6 @@ class BleManager @Inject constructor(
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // ==================== 新增：统一决策防丢器断连报警配置 ====================
-
-    /**
-     * 判断当前是否应该开启防丢器的"断连自动报警"功能
-     * 优先级：WiFi勿扰 > 定时勿扰 > 断连自动报警开关
-     */
     fun shouldEnableDeviceDisconnectAlarm(
         isWifiDndEnabled: Boolean,
         isWifiConnected: Boolean,
@@ -107,27 +97,20 @@ class BleManager @Inject constructor(
         isInDndTimeRange: Boolean,
         isDisconnectAlarmEnabled: Boolean
     ): Boolean {
-        // 1. WiFi勿扰最高优先级：开启且当前已连接WiFi → 防丢器不报警
         if (isWifiDndEnabled && isWifiConnected) {
             Log.d(TAG, "决策结果：WiFi勿扰生效，防丢器断连报警禁用")
             return false
         }
 
-        // 2. 定时勿扰：开启且当前处于勿扰时段 → 防丢器不报警
         if (isScheduleDndEnabled && isInDndTimeRange) {
             Log.d(TAG, "决策结果：定时勿扰生效，防丢器断连报警禁用")
             return false
         }
 
-        // 3. 最后由"断连自动报警"开关决定
         Log.d(TAG, "决策结果：由断连报警开关决定=$isDisconnectAlarmEnabled")
         return isDisconnectAlarmEnabled
     }
 
-    /**
-     * 向防丢器同步当前的断连报警配置
-     * 在设置变化、WiFi变化、时间变化时调用
-     */
     fun syncDeviceDisconnectAlarmConfig(
         isWifiDndEnabled: Boolean,
         isWifiConnected: Boolean,
@@ -145,7 +128,6 @@ class BleManager @Inject constructor(
         setDisconnectAlarmEnabled(shouldEnable)
     }
 
-    // ==================== 核心修复：BLE写入队列管理 ====================
     private fun queueWrite(characteristic: BluetoothGattCharacteristic, value: ByteArray) {
         writeQueue.add(WriteRequest(characteristic, value))
         if (!isWriting) {
@@ -192,7 +174,6 @@ class BleManager @Inject constructor(
                     Log.d(TAG, "设备已断开，准备自动重连...")
                     _connectionState.value = BleConnectionState.Disconnected
 
-                    // 修复2：断开时必须先close()释放原生资源，否则会导致蓝牙底层阻塞
                     try {
                         gatt.close()
                         Log.d(TAG, "GATT已关闭，释放原生资源")
@@ -206,9 +187,13 @@ class BleManager @Inject constructor(
                     customCharacteristic = null
                     disconnectAlarmCharacteristic = null
                     pendingDisconnectAlarmState = null
-                    // 断连后清空写入队列
                     writeQueue.clear()
                     isWriting = false
+
+                    // 核心修复：断开连接时重置双击检测状态，防止跨会话干扰
+                    // 避免重连后旧状态导致单击被误判为双击
+                    lastButtonPressTime = -1L
+                    lastDoubleClickTime = 0L
 
                     rssiPollingJob?.cancel()
                     rssiPollingJob = null
@@ -254,18 +239,15 @@ class BleManager @Inject constructor(
                     }
                 }
 
-                // 核心修复：发现断连报警配置特征值
                 disconnectAlarmCharacteristic = gatt.getService(CUSTOM_SERVICE_UUID)
                     ?.getCharacteristic(DISCONNECT_ALARM_CHARACTERISTIC_UUID)
                 Log.d(TAG, "断连报警特征值: ${disconnectAlarmCharacteristic != null}")
 
-                // 核心修复：服务发现完成后，写入缓存的断连报警配置
                 pendingDisconnectAlarmState?.let { pending ->
                     Log.d(TAG, "服务发现完成，写入缓存的断连报警配置: $pending")
                     setDisconnectAlarmEnabled(pending)
                 }
 
-                // ==================== 核心修复：延迟读取电池，避免与descriptor写入冲突 ====================
                 batteryCharacteristic?.let {
                     mainHandler.postDelayed({
                         try {
@@ -279,7 +261,6 @@ class BleManager @Inject constructor(
             }
         }
 
-        // ==================== 核心修复：同时支持新版和旧版onCharacteristicRead ====================
         override fun onCharacteristicRead(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
             Log.d(TAG, "Characteristic read(new): ${characteristic.uuid}, status: $status, value: ${value.contentToString()}")
             handleCharacteristicRead(characteristic, value, status)
@@ -313,9 +294,10 @@ class BleManager @Inject constructor(
         }
 
         @Deprecated("Deprecated in API 33")
- override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+        override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             @Suppress("DEPRECATION")
-            val value = characteristic.value
+            // 核心修复：添加 null 安全检查，防止旧版 API 中 characteristic.value 为 null 导致崩溃
+            val value = characteristic.value ?: return
             onCharacteristicValueChanged(characteristic, value)
         }
 
@@ -323,8 +305,6 @@ class BleManager @Inject constructor(
             onCharacteristicValueChanged(characteristic, value)
         }
 
-        // ==================== 核心修复：只保留旧版onCharacteristicWrite（参数nullable），所有API通用 ====================
-        // 注意：不要同时实现新版4参数版本，否则API33+会触发两次！
         override fun onCharacteristicWrite(
             gatt: BluetoothGatt?,
             characteristic: BluetoothGattCharacteristic?,
@@ -337,6 +317,16 @@ class BleManager @Inject constructor(
         private fun onCharacteristicValueChanged(characteristic: BluetoothGattCharacteristic, value: ByteArray) {
             Log.d(TAG, "Characteristic changed: ${characteristic.uuid}, value: ${value.contentToString()}")
             if (characteristic.uuid == CUSTOM_CHARACTERISTIC_UUID) {
+                // ==================== 核心修复：与 i-Searching 保持一致 ====================
+                // i-Searching 的 MyApplication.onCharacteristicChanged 中明确检查了：
+                // if (value.length <= 0 || value[0] != 1) { return; }
+                // 防丢器一次按键通常会发送两次通知：按下(value[0]==1)和释放(value[0]==0)
+                // 如果不过滤，释放通知会被误判为第二次点击，导致"单击触发报警"
+                if (value.isEmpty() || value[0] != 1.toByte()) {
+                    Log.d(TAG, "忽略非按下通知: value=${value.contentToString()}")
+                    return
+                }
+
                 val currentTime = System.currentTimeMillis()
 
                 if (currentTime - lastDoubleClickTime < DOUBLE_CLICK_COOLDOWN) {
@@ -344,14 +334,18 @@ class BleManager @Inject constructor(
                     return
                 }
 
-                // 修复1：首次按下（lastButtonPressTime == -1）或超过超时时间，都视为"第一次点击"
+                // 核心修复：添加时间间隔下限(50ms)，防止BLE堆栈重复上报通知导致误判为双击
+                // i-Searching 的 MediaPlayerTools.OnFDQClick 中也有类似下限判断(>10ms)
+                if (lastButtonPressTime != -1L && currentTime - lastButtonPressTime < 50) {
+                    Log.d(TAG, "通知间隔过短(${currentTime - lastButtonPressTime}ms)，忽略重复通知")
+                    return
+                }
+
                 if (lastButtonPressTime == -1L || currentTime - lastButtonPressTime >= DOUBLE_PRESS_TIMEOUT) {
-                    // 这是第一次点击，记录时间，什么都不做
                     lastButtonPressTime = currentTime
                     Log.d(TAG, "检测到第一次点击，等待第二次...")
                 } else {
-                    // 在超时时间内收到第二次点击 → 确认为双击
-                    lastButtonPressTime = -1L  // 重置，准备下一次双击检测
+                    lastButtonPressTime = -1L
                     lastDoubleClickTime = currentTime
 
                     managerScope.launch {
@@ -587,7 +581,6 @@ class BleManager @Inject constructor(
         }
     }
 
-    // ==================== 核心修复：使用写入队列，避免BLE命令冲突 ====================
     @SuppressLint("MissingPermission")
     fun startAlarm() {
         alertCharacteristic?.let { characteristic ->
@@ -604,7 +597,6 @@ class BleManager @Inject constructor(
         } ?: Log.w(TAG, "报警特征值未找到，无法停止报警")
     }
 
-    // 核心修复：配置防丢器断连报警行为（使用写入队列）
     @SuppressLint("MissingPermission")
     fun setDisconnectAlarmEnabled(enabled: Boolean) {
         disconnectAlarmCharacteristic?.let { characteristic ->
@@ -615,7 +607,6 @@ class BleManager @Inject constructor(
             pendingDisconnectAlarmState = null
             Log.d(TAG, "断连报警配置已加入写入队列: $enabled")
         } ?: run {
-            // 特征值未就绪，缓存状态，等服务发现后自动写入
             pendingDisconnectAlarmState = enabled
             Log.w(TAG, "FFE2未就绪，已缓存断连报警状态: $enabled")
         }
@@ -647,7 +638,6 @@ class BleManager @Inject constructor(
         }
     }
 
-    // ==================== 新增：主动读取电池电量（供外部调用） ====================
     @SuppressLint("MissingPermission")
     fun readBattery() {
         batteryCharacteristic?.let { characteristic ->
@@ -667,7 +657,7 @@ class BleManager @Inject constructor(
     }
 
     private fun scheduleReconnect(mac: String) {
-        val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) 
+        val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE)
             as? BluetoothManager)?.adapter
 
         if (currentAdapter != null && currentAdapter.isEnabled) {

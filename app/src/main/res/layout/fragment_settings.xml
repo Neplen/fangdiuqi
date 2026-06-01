@@ -91,7 +91,7 @@
             android:id="@+id/switch_wifi_dnd"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="WIFI 勿扰模式（连接家中 WiFi 时不报警）"
+            android:text="WIFI 勿扰模式（连接 WiFi 时不报警）"
             android:textSize="14sp"
             android:checked="false"
             android:layout_marginBottom="12dp" />

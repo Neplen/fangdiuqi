@@ -15,10 +15,6 @@ interface BleDeviceDao {
     @Query("SELECT * FROM ble_devices WHERE macAddress = :macAddress")
     fun getDeviceByMacFlow(macAddress: String): Flow<BleDevice?>
 
-    // 新增：获取第一个已保存的设备（用于自动连接）
-    @Query("SELECT * FROM ble_devices ORDER BY updatedAt DESC LIMIT 1")
-    suspend fun getFirstDevice(): BleDevice?
-
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertDevice(device: BleDevice)
 

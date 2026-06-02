@@ -73,7 +73,7 @@ class BleMonitorService : Service() {
 
     private var isMonitoring = false
     private var currentDevice: BleDevice? = null
-    // 核心修复：移除硬编码 MAC，改为从数据库加载
+    // ===== 修改：deviceMac 改为从 DataStore 读取，不再硬编码 =====
     private var deviceMac: String? = null
 
     private var isAlarmPlaying = false
@@ -319,16 +319,23 @@ class BleMonitorService : Service() {
         isMonitoring = true
 
         try {
-            // 核心修复：从数据库加载第一个已保存的设备，而非硬编码MAC
+            // ===== 修改：从 DataStore 读取已保存的设备 MAC，不再硬编码 =====
             serviceScope.launch {
                 try {
-                    val savedDevice = deviceRepository.getFirstDevice()
-                    if (savedDevice != null) {
-                        currentDevice = savedDevice
-                        deviceMac = savedDevice.macAddress
-                        Log.d(TAG, "加载已绑定设备: ${savedDevice.name} (${savedDevice.macAddress})")
+                    val savedMac = settingsManager.deviceMac.firstOrNull()
+                    if (!savedMac.isNullOrEmpty()) {
+                        deviceMac = savedMac
+                        bleManager.setDeviceMacToConnect(savedMac)
+                        Log.d(TAG, "从 DataStore 加载已绑定设备 MAC: $savedMac")
+
+                        deviceRepository.getDeviceByMac(savedMac)?.let { device ->
+                            currentDevice = device
+                            Log.d(TAG, "加载设备配置完成: ${device.name}")
+                        } ?: run {
+                            Log.w(TAG, "数据库中未找到设备记录: $savedMac")
+                        }
                     } else {
-                        Log.d(TAG, "没有已绑定设备，等待用户扫描绑定")
+                        Log.d(TAG, "未绑定任何设备，等待用户扫描绑定")
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "设备加载失败", e)
@@ -472,7 +479,10 @@ class BleMonitorService : Service() {
                 val connectionState = bleManager.connectionState.value
                 if (connectionState is BleConnectionState.Disconnected) {
                     Log.d(TAG, "心跳检测：设备断开，触发重连")
-                    bleManager.reconnectIfDisconnected()
+                    // ===== 修改：使用 deviceMac（从 DataStore 读取）进行重连 =====
+                    deviceMac?.let { mac ->
+                        bleManager.reconnectIfDisconnected(mac)
+                    } ?: Log.d(TAG, "未绑定设备，跳过重连")
                 }
 
                 notificationManager.notify(NOTIFICATION_ID, createNotification())
@@ -500,7 +510,10 @@ class BleMonitorService : Service() {
                 val connectionState = bleManager.connectionState.value
 
                 if (connectionState is BleConnectionState.Disconnected) {
-                    bleManager.reconnectIfDisconnected()
+                    // ===== 修改：使用 deviceMac（从 DataStore 读取）进行重连 =====
+                    deviceMac?.let { mac ->
+                        bleManager.reconnectIfDisconnected(mac)
+                    } ?: Log.d(TAG, "未绑定设备，跳过重连")
                 }
             }
         }

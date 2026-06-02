@@ -25,7 +25,9 @@ class SettingsViewModel @Inject constructor(
     private val _isDisconnectAlarmEnabled = MutableStateFlow(true)
     val isDisconnectAlarmEnabled: StateFlow<Boolean> = _isDisconnectAlarmEnabled.asStateFlow()
 
-    // 核心修复：移除 deviceName Flow（设置页不再显示设备名称）
+    // ===== 修改：删除 deviceName Flow，设置页不再显示/编辑设备名称 =====
+    // 设备名称改为从数据库实时读取，主页从 BleManager 动态获取
+
     val isWifiDndEnabled: Flow<Boolean> = settingsManager.isWifiDndEnabled
     val isScheduleDndEnabled: Flow<Boolean> = settingsManager.isScheduleDndEnabled
     val dndStartTime: Flow<String> = settingsManager.dndStartTime

@@ -23,11 +23,6 @@ class DeviceRepository @Inject constructor(
         return bleDeviceDao.getDeviceByMacFlow(macAddress)
     }
 
-    // 新增：获取第一个已保存的设备
-    suspend fun getFirstDevice(): BleDevice? {
-        return bleDeviceDao.getFirstDevice()
-    }
-
     suspend fun insertDevice(device: BleDevice) {
         bleDeviceDao.insertDevice(device)
     }

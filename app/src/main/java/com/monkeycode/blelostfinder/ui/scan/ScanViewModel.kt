@@ -57,6 +57,7 @@ class ScanViewModel @Inject constructor(
         bleScanner.stopScan()
     }
 
+    // ===== 修改：连接成功后同时保存设备名称和 MAC 到 DataStore =====
     fun connectToDevice(scanResult: ScanResultWrapper) {
         viewModelScope.launch {
             try {
@@ -64,24 +65,26 @@ class ScanViewModel @Inject constructor(
                 bleScanner.stopScan()
 
                 val deviceName = scanResult.name ?: "BLE Device"
-                val macAddress = scanResult.macAddress
 
                 // 保存设备到数据库
                 val device = BleDevice(
-                    macAddress = macAddress,
+                    macAddress = scanResult.macAddress,
                     name = deviceName,
                     rssiThreshold = -90
                 )
                 deviceRepository.insertDevice(device)
 
-                // 核心修复：同时保存到 DataStore，供设置页等使用
+                // ===== 修改：同时保存设备名称和 MAC 到 DataStore =====
+                settingsManager.updateDeviceMac(scanResult.macAddress)
                 settingsManager.updateDeviceName(deviceName)
-                settingsManager.updateDeviceMac(macAddress)
+
+                // 设置 BleManager 的目标 MAC（用于断连后自动重连）
+                bleManager.setDeviceMacToConnect(scanResult.macAddress)
 
                 // 开始连接
                 _connectionState.value = "正在连接 ${scanResult.name}..."
 
-                bleManager.connect(macAddress).collect { state ->
+                bleManager.connect(scanResult.macAddress).collect { state ->
                     when (state) {
                         is com.monkeycode.blelostfinder.ble.BleConnectionState.Connected -> {
                             _connectionState.value = "连接成功！${scanResult.name}"

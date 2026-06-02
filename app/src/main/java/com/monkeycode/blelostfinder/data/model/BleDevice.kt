@@ -7,8 +7,7 @@ import androidx.room.PrimaryKey
 data class BleDevice(
     @PrimaryKey
     val macAddress: String,
-    // 核心修复：移除默认名称"iTAG"，改为空字符串，由扫描时实际获取的设备名填充
-    val name: String = "",
+    val name: String = "iTAG",
     val rssiThreshold: Int = -90,
     val alarmRingtonePath: String? = null,
     val isWifiDndEnabled: Boolean = true,

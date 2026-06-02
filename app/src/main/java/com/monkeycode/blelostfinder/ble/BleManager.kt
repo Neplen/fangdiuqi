@@ -35,8 +35,8 @@ class BleManager @Inject constructor(
         private var lastDoubleClickTime = 0L
         private const val DOUBLE_CLICK_COOLDOWN = 800L
 
-        // 已移除硬编码的 I_DEVICE_NAME 和 I_DEVICE_MAC
-        // 设备 MAC 通过 connect()/connectDirectly() 传入并保存到 deviceMacToConnect
+        // ===== 修改：删除硬编码的 I_DEVICE_NAME 和 I_DEVICE_MAC =====
+        // 设备信息改为从 DataStore/Room 动态读取，支持更换防丢器
 
         val ALERT_SERVICE_UUID = UUID.fromString("00001802-0000-1000-8000-00805f9b34fb")
         val ALERT_LEVEL_CHARACTERISTIC_UUID = UUID.fromString("00002a06-0000-1000-8000-00805f9b34fb")
@@ -85,6 +85,10 @@ class BleManager @Inject constructor(
 
     private val _bleEvents = MutableSharedFlow<BleEvent>(replay = 0, extraBufferCapacity = 1)
     val bleEvents: SharedFlow<BleEvent> = _bleEvents.asSharedFlow()
+
+    // ===== 修改：新增已连接设备名称 Flow，供主页动态显示 =====
+    private val _connectedDeviceName = MutableStateFlow<String?>(null)
+    val connectedDeviceName: StateFlow<String?> = _connectedDeviceName.asStateFlow()
 
     private val managerScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
@@ -167,6 +171,8 @@ class BleManager @Inject constructor(
                 BluetoothProfile.STATE_CONNECTED -> {
                     _connectionState.value = BleConnectionState.Connected
                     bluetoothGatt = gatt
+                    // ===== 修改：连接成功后从 BluetoothDevice 获取名称 =====
+                    _connectedDeviceName.value = gatt.device.name ?: "未知设备"
                     gatt.discoverServices()
                     startRssiPolling()
                 }
@@ -674,27 +680,35 @@ class BleManager @Inject constructor(
         }
     }
 
-    fun reconnectIfDisconnected() {
+    // ===== 修改：reconnectIfDisconnected 不再使用硬编码 MAC，改为从 DataStore 读取 =====
+    // 由 BleMonitorService 或 HomeViewModel 传入实际保存的 MAC
+    fun reconnectIfDisconnected(macAddress: String? = deviceMacToConnect) {
         val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
 
-        if (deviceMacToConnect != null && currentAdapter != null && currentAdapter.isEnabled) {
+        if (macAddress != null && currentAdapter != null && currentAdapter.isEnabled) {
             try {
                 bluetoothAdapter = currentAdapter
                 cleanupGatt()
-                connectDirectly(deviceMacToConnect!!)
-                Log.d(TAG, "蓝牙重连已发起：${deviceMacToConnect}")
+                connectDirectly(macAddress)
+                Log.d(TAG, "蓝牙重连已发起：$macAddress")
             } catch (e: Exception) {
                 Log.e(TAG, "蓝牙重连失败", e)
             }
         } else {
-            if (deviceMacToConnect == null) {
-                Log.d(TAG, "没有保存的设备地址，跳过重连")
+            if (macAddress == null) {
+                Log.d(TAG, "没有保存的设备地址，跳过重连（请进入扫描页绑定设备）")
             } else if (currentAdapter == null) {
                 Log.w(TAG, "蓝牙适配器不可用，等待初始化")
             } else {
                 Log.w(TAG, "蓝牙未开启，等待用户手动开启")
             }
         }
+    }
+
+    // ===== 新增：设置当前要连接/重连的 MAC 地址（由扫描页或 Service 调用） =====
+    fun setDeviceMacToConnect(mac: String?) {
+        deviceMacToConnect = mac
+        Log.d(TAG, "设置目标设备 MAC: $mac")
     }
 
     private fun cleanupGatt() {

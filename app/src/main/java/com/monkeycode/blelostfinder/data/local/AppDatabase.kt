@@ -10,8 +10,7 @@ import com.monkeycode.blelostfinder.data.model.LocationRecord
 
 @Database(
     entities = [BleDevice::class, LocationRecord::class],
-    // 核心修复：升级数据库版本到 3，因为 BleDevice 实体的默认值有变化
-    version = 3,
+    version = 2,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -29,11 +28,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "ble_lost_finder_database"
-                )
-                // 核心修复：添加破坏性迁移策略，因为版本升级但无复杂迁移需求
-                // 用户首次安装或清除数据后重装，数据库会重新创建
-                .fallbackToDestructiveMigration()
-                .build()
+                ).build()
                 INSTANCE = instance
                 instance
             }

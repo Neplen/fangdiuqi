@@ -91,7 +91,7 @@ class SettingsFragment : Fragment() {
     private fun setupObservers() {
         viewLifecycleOwner.lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                // 核心修复：移除 deviceName 观察（已删除对应UI）
+                // ===== 修改：删除 deviceName 监听（设置页不再显示设备名称输入框） =====
 
                 launch {
                     viewModel.isDisconnectAlarmEnabled.collect { enabled ->

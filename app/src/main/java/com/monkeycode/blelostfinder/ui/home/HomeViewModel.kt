@@ -18,7 +18,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -40,6 +40,9 @@ class HomeViewModel @Inject constructor(
     val rssi: StateFlow<Int> = bleManager.rssi
     val batteryLevel: StateFlow<Int> = bleManager.batteryLevel
 
+    // ===== 修改：新增已连接设备名称 Flow，从 BleManager 实时获取 =====
+    val connectedDeviceName: StateFlow<String?> = bleManager.connectedDeviceName
+
     private val _isDeviceAlarmPlaying = MutableStateFlow(false)
     val isDeviceAlarmPlaying: StateFlow<Boolean> = _isDeviceAlarmPlaying.asStateFlow()
 
@@ -48,10 +51,15 @@ class HomeViewModel @Inject constructor(
     private val _phoneAlarmTriggered = MutableStateFlow(false)
     val phoneAlarmTriggered: StateFlow<Boolean> = _phoneAlarmTriggered.asStateFlow()
 
+    // ===== 修改：新增是否已绑定设备标志 =====
+    private val _isDeviceBound = MutableStateFlow(false)
+    val isDeviceBound: StateFlow<Boolean> = _isDeviceBound.asStateFlow()
+
     init {
-        loadDevice()
+        checkDeviceBound()
         observeBleState()
         observeBleEvents()
+
         // 启动时如果正在响铃，显示弹窗
         if (alarmSoundManager.isPlaying()) {
             _phoneAlarmTriggered.value = true
@@ -59,36 +67,48 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    // 核心修复：改为从数据库加载已保存的设备，而非硬编码MAC
-    // 首次安装无设备时不自动连接；绑定新设备后自动连接
-    private fun loadDevice() {
+    // ===== 修改：检查是否已绑定设备（从 DataStore 读取 MAC） =====
+    private fun checkDeviceBound() {
         viewModelScope.launch {
-            deviceRepository.allDevices.collect { devices ->
-                val savedDevice = devices.firstOrNull()
-                val hadDevice = _device.value != null
-                _device.value = savedDevice
+            val savedMac = settingsManager.deviceMac.firstOrNull()
+            val hasDevice = !savedMac.isNullOrEmpty()
+            _isDeviceBound.value = hasDevice
+            Log.d("HomeViewModel", "设备绑定状态: $hasDevice, MAC=$savedMac")
 
-                // 如果检测到新绑定的设备（之前没有，现在有了），且当前未连接，自动连接
-                if (!hadDevice && savedDevice != null && _connectionState.value is BleConnectionState.Disconnected) {
-                    Log.d("HomeViewModel", "检测到新绑定设备，自动连接: ${savedDevice.macAddress}")
-                    connectToDevice()
-                }
+            if (hasDevice) {
+                // 已绑定设备，加载设备信息并尝试连接
+                loadDevice(savedMac)
+                connectToDevice()
+            } else {
+                Log.d("HomeViewModel", "未绑定设备，等待用户扫描绑定")
             }
         }
     }
 
-    // 核心修复：使用已保存设备的MAC进行连接，无设备时不连接
+    // ===== 修改：connectToDevice 从 DataStore 读取 MAC，不再硬编码 =====
     fun connectToDevice() {
-        val mac = _device.value?.macAddress
-        if (mac != null) {
+        viewModelScope.launch {
             try {
-                bleManager.connectDirectly(mac)
-                Log.d("HomeViewModel", "已调用 connectDirectly()，MAC=$mac")
+                val savedMac = settingsManager.deviceMac.firstOrNull()
+                if (!savedMac.isNullOrEmpty()) {
+                    bleManager.setDeviceMacToConnect(savedMac)
+                    bleManager.connectDirectly(savedMac)
+                    Log.d("HomeViewModel", "已调用 connectDirectly() MAC=$savedMac")
+                } else {
+                    Log.d("HomeViewModel", "未绑定设备，无法自动连接")
+                }
             } catch (e: Exception) {
                 Log.e("HomeViewModel", "连接失败：${e.message}", e)
             }
-        } else {
-            Log.d("HomeViewModel", "没有已保存的设备，跳过自动连接，请进入扫描页绑定")
+        }
+    }
+
+    // ===== 修改：loadDevice 使用传入的 MAC，不再硬编码 =====
+    private fun loadDevice(macAddress: String) {
+        viewModelScope.launch {
+            deviceRepository.getDeviceByMacFlow(macAddress).collect { device: BleDevice? ->
+                _device.value = device
+            }
         }
     }
 
@@ -171,7 +191,7 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 alarmSoundManager.stopPlaying()
-                val ringtonePath = settingsManager.alarmRingtonePath.first()
+                val ringtonePath = settingsManager.alarmRingtonePath.firstOrNull()
                 alarmSoundManager.playAlarm(ringtonePath)
                 _phoneAlarmTriggered.value = true
                 Log.d("HomeViewModel", "触发手机响铃，铃声类型：${ringtonePath ?: "默认"}")

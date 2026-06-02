@@ -61,11 +61,13 @@ class HomeFragment : Fragment() {
             showPhoneAlarmDialog()
         }
 
-        // 如果当前是断开状态，自动尝试重连（仅当有已保存设备时）
-        val currentState = viewModel.connectionState.value
-        if (currentState is BleConnectionState.Disconnected) {
-            Log.d("HomeFragment", "onResume: 检测到断开状态，尝试重连")
-            connectToDevice()
+        // ===== 修改：只有已绑定设备且当前断开时才自动重连 =====
+        if (viewModel.isDeviceBound.value) {
+            val currentState = viewModel.connectionState.value
+            if (currentState is BleConnectionState.Disconnected) {
+                Log.d("HomeFragment", "onResume: 检测到断开状态，自动重连")
+                connectToDevice()
+            }
         }
     }
 
@@ -79,9 +81,21 @@ class HomeFragment : Fragment() {
                     }
                 }
 
+                // ===== 修改：监听已连接设备名称（从 BleManager 实时获取） =====
+                launch {
+                    viewModel.connectedDeviceName.collect { name ->
+                        binding.tvDeviceName.text = name ?: "未连接"
+                    }
+                }
+
                 launch {
                     viewModel.device.collect { device ->
-                        updateDeviceState(device)
+                        device?.let {
+                            // 数据库中的设备信息作为备用显示
+                            if (viewModel.connectedDeviceName.value == null) {
+                                binding.tvDeviceName.text = it.name
+                            }
+                        }
                     }
                 }
 
@@ -121,6 +135,18 @@ class HomeFragment : Fragment() {
                         updateMonitorSwitch(isRunning)
                     }
                 }
+
+                // ===== 新增：监听设备绑定状态，未绑定时提示去扫描 =====
+                launch {
+                    viewModel.isDeviceBound.collect { isBound ->
+                        if (!isBound) {
+                            binding.tvConnectionStatus.text = "未绑定设备"
+                            binding.tvConnectionStatus.setTextColor(requireContext().getColor(R.color.disconnected))
+                            binding.btnConnectDevice.text = "去扫描绑定"
+                            binding.btnConnectDevice.isEnabled = true
+                        }
+                    }
+                }
             }
         }
     }
@@ -132,7 +158,12 @@ class HomeFragment : Fragment() {
                 binding.btnConnectDevice.isEnabled = false
             }
             is BleConnectionState.Disconnected -> {
-                binding.btnConnectDevice.text = "连接"
+                // ===== 修改：根据是否已绑定显示不同文本 =====
+                if (viewModel.isDeviceBound.value) {
+                    binding.btnConnectDevice.text = "连接"
+                } else {
+                    binding.btnConnectDevice.text = "去扫描绑定"
+                }
                 binding.btnConnectDevice.isEnabled = true
             }
             is BleConnectionState.Connecting -> {
@@ -160,10 +191,16 @@ class HomeFragment : Fragment() {
         }
 
         binding.btnConnectDevice.setOnClickListener {
-            // 核心修复：点击"连接"按钮时，强制重新连接
-            // 解决"超过 40 秒回到范围，显示已断开，点击连接无效"的问题
-            connectToDevice()
-            Snackbar.make(binding.root, "正在连接设备...", Snackbar.LENGTH_SHORT).show()
+            // ===== 修改：未绑定设备时跳转扫描页，已绑定则强制重新连接 =====
+            if (!viewModel.isDeviceBound.value) {
+                findNavController().navigate(R.id.action_scan)
+                Snackbar.make(binding.root, "请先扫描并绑定防丢器", Snackbar.LENGTH_SHORT).show()
+            } else {
+                // 核心修复：点击"连接"按钮时，强制重新连接
+                // 解决"超过 40 秒回到范围，显示已断开，点击连接无效"的问题
+                connectToDevice()
+                Snackbar.make(binding.root, "正在连接设备...", Snackbar.LENGTH_SHORT).show()
+            }
         }
 
         binding.btnAlarmDevice.setOnClickListener {
@@ -184,7 +221,7 @@ class HomeFragment : Fragment() {
         // 解决"回到范围后手机仍在报警，打开 APP 点击连接"的场景
         viewModel.stopPhoneAlarm()
 
-        // 触发重连（仅当有已保存设备时才会真正发起连接）
+        // 触发重连
         viewModel.connectToDevice()
     }
 
@@ -214,11 +251,13 @@ class HomeFragment : Fragment() {
         }
     }
 
-    // 核心修复：弹窗消息文字改为 24sp，设备名称动态获取
+    // 核心修复：弹窗消息文字改为 24sp
     private fun showPhoneAlarmDialog() {
         alarmDialog?.dismiss()
-        // 核心修复：动态获取设备名称，未绑定时显示"防丢器"
-        val deviceName = viewModel.device.value?.name ?: "防丢器"
+        // ===== 修改：弹窗标题使用实际设备名称 =====
+        val deviceName = viewModel.connectedDeviceName.value
+            ?: viewModel.device.value?.name
+            ?: "防丢器"
 
         val message = SpannableString("按下防丢器按钮两次可以停止报警")
         message.setSpan(
@@ -251,7 +290,11 @@ class HomeFragment : Fragment() {
                 binding.tvConnectionStatus.setTextColor(requireContext().getColor(R.color.connected))
             }
             is BleConnectionState.Disconnected -> {
-                binding.tvConnectionStatus.text = "已断开"
+                if (viewModel.isDeviceBound.value) {
+                    binding.tvConnectionStatus.text = "已断开"
+                } else {
+                    binding.tvConnectionStatus.text = "未绑定设备"
+                }
                 binding.tvConnectionStatus.setTextColor(requireContext().getColor(R.color.disconnected))
             }
             is BleConnectionState.Connecting -> {
@@ -266,9 +309,8 @@ class HomeFragment : Fragment() {
         }
     }
 
-    // 核心修复：支持未绑定设备状态（device 为 null 时显示"未绑定设备"）
-    private fun updateDeviceState(device: BleDevice?) {
-        binding.tvDeviceName.text = device?.name ?: "未绑定设备"
+    private fun updateDeviceState(device: BleDevice) {
+        // 由 connectedDeviceName Flow 处理动态名称
     }
 
     private fun updateDistance(rssi: Int) {

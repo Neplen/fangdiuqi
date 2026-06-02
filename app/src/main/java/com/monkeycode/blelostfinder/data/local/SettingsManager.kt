@@ -34,12 +34,12 @@ class SettingsManager @Inject constructor(
         val MONITORING_ENABLED = booleanPreferencesKey("monitoring_enabled")
     }
 
-    // 核心修复：默认值改为空字符串，表示未绑定设备
+    // ===== 修改：deviceName 和 deviceMac 默认值改为空字符串 =====
+    // 空字符串表示未绑定设备，首次安装后不会自动连接
     val deviceName: Flow<String> = context.dataStore.data.map { preferences ->
         preferences[DEVICE_NAME] ?: ""
     }
 
-    // 核心修复：默认值改为空字符串，表示未绑定设备
     val deviceMac: Flow<String> = context.dataStore.data.map { preferences ->
         preferences[DEVICE_MAC] ?: ""
     }

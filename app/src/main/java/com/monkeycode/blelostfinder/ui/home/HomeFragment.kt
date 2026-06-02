@@ -61,10 +61,10 @@ class HomeFragment : Fragment() {
             showPhoneAlarmDialog()
         }
 
-        // 如果当前是断开状态，自动尝试重连
+        // 如果当前是断开状态，自动尝试重连（仅当有已保存设备时）
         val currentState = viewModel.connectionState.value
         if (currentState is BleConnectionState.Disconnected) {
-            Log.d("HomeFragment", "onResume: 检测到断开状态，自动重连")
+            Log.d("HomeFragment", "onResume: 检测到断开状态，尝试重连")
             connectToDevice()
         }
     }
@@ -81,7 +81,7 @@ class HomeFragment : Fragment() {
 
                 launch {
                     viewModel.device.collect { device ->
-                        device?.let { updateDeviceState(it) }
+                        updateDeviceState(device)
                     }
                 }
 
@@ -184,7 +184,7 @@ class HomeFragment : Fragment() {
         // 解决"回到范围后手机仍在报警，打开 APP 点击连接"的场景
         viewModel.stopPhoneAlarm()
 
-        // 触发重连
+        // 触发重连（仅当有已保存设备时才会真正发起连接）
         viewModel.connectToDevice()
     }
 
@@ -214,10 +214,11 @@ class HomeFragment : Fragment() {
         }
     }
 
-    // 核心修复：弹窗消息文字改为 24sp
+    // 核心修复：弹窗消息文字改为 24sp，设备名称动态获取
     private fun showPhoneAlarmDialog() {
         alarmDialog?.dismiss()
-        val deviceName = viewModel.device.value?.name ?: "iTAG"
+        // 核心修复：动态获取设备名称，未绑定时显示"防丢器"
+        val deviceName = viewModel.device.value?.name ?: "防丢器"
 
         val message = SpannableString("按下防丢器按钮两次可以停止报警")
         message.setSpan(
@@ -265,8 +266,9 @@ class HomeFragment : Fragment() {
         }
     }
 
-    private fun updateDeviceState(device: BleDevice) {
-        binding.tvDeviceName.text = device.name
+    // 核心修复：支持未绑定设备状态（device 为 null 时显示"未绑定设备"）
+    private fun updateDeviceState(device: BleDevice?) {
+        binding.tvDeviceName.text = device?.name ?: "未绑定设备"
     }
 
     private fun updateDistance(rssi: Int) {

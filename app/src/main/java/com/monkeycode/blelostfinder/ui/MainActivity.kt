@@ -32,12 +32,12 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "BLELostFinder"
     }
-    
+
     private lateinit var binding: ActivityMainBinding
-    
+
     @Inject
     lateinit var bleManager: BleManager
-    
+
     private val bluetoothEnableLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -69,7 +69,7 @@ class MainActivity : AppCompatActivity() {
             showSnackbar("蓝牙操作失败：${e.message}")
         }
     }
-    
+
     // 蓝牙状态变化广播接收器
     private val bluetoothReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -79,12 +79,15 @@ class MainActivity : AppCompatActivity() {
                     val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
                     when (state) {
                         BluetoothAdapter.STATE_ON -> {
-                            Log.d(TAG, "蓝牙已开启，启动服务并尝试重连设备")
+                            Log.d(TAG, "蓝牙已开启，启动服务")
                             binding.root.postDelayed({
                                 try {
                                     startMonitorService()
+                                    // 核心修复：移除硬编码MAC重连，改为让BleManager自己判断
+                                    // BleManager.reconnectIfDisconnected() 会检查 deviceMacToConnect
+                                    // 只有在用户通过扫描页绑定过设备后才会重连
                                     bleManager.reconnectIfDisconnected()
-                                    Log.d(TAG, "已调用蓝牙重连方法")
+                                    Log.d(TAG, "已调用蓝牙重连方法（仅当有已绑定设备时生效）")
                                 } catch (e: Exception) {
                                     Log.e(TAG, "蓝牙开启后操作失败", e)
                                 }
@@ -107,7 +110,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-    
+
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
@@ -131,21 +134,21 @@ class MainActivity : AppCompatActivity() {
         try {
             binding = ActivityMainBinding.inflate(layoutInflater)
             setContentView(binding.root)
-            
+
             setupNavigation()
-            
+
             // 注册蓝牙状态广播接收器
             val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
             registerReceiver(bluetoothReceiver, filter)
             Log.d(TAG, "注册蓝牙广播接收器")
-            
+
             checkPermissions()
         } catch (e: Exception) {
             Log.e(TAG, "onCreate 失败", e)
             showSnackbar("APP 启动失败：${e.message}")
         }
     }
-    
+
     override fun onDestroy() {
         super.onDestroy()
         try {
@@ -155,13 +158,13 @@ class MainActivity : AppCompatActivity() {
             Log.e(TAG, "注销广播接收器失败", e)
         }
     }
-    
+
     // 添加菜单支持
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.main_menu, menu)
         return true
     }
-    
+
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
             R.id.action_add_device -> {
@@ -173,10 +176,10 @@ class MainActivity : AppCompatActivity() {
             else -> super.onOptionsItemSelected(item)
         }
     }
-    
+
     private fun setupNavigation() {
         val navController = findNavController(R.id.nav_host_fragment)
-        
+
         // 不使用 setupWithNavController 的自动导航，改用手动设置点击事件
         binding.bottomNavigation.setOnItemSelectedListener { item ->
             when (item.itemId) {
@@ -194,7 +197,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-    
+
     private fun checkPermissions() {
         try {
             // 第一步：先申请位置权限（BLE 扫描必需，Android 12- 也需要用于扫描）
@@ -202,20 +205,20 @@ class MainActivity : AppCompatActivity() {
                 Manifest.permission.ACCESS_FINE_LOCATION,
                 Manifest.permission.ACCESS_COARSE_LOCATION
             )
-            
+
             val needLocation = locationPermissions.filter {
                 ContextCompat.checkSelfPermission(this, it) != android.content.pm.PackageManager.PERMISSION_GRANTED
             }.toTypedArray()
-            
+
             if (needLocation.isNotEmpty()) {
                 // 先申请位置权限
                 permissionLauncher.launch(needLocation)
                 return
             }
-            
+
             // 位置权限已有，继续申请其他权限
             val allPermissions = mutableListOf<String>()
-            
+
             // Android 12+ (API 31+) 需要新的蓝牙权限
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 allPermissions.add(Manifest.permission.BLUETOOTH_SCAN)
@@ -225,7 +228,7 @@ class MainActivity : AppCompatActivity() {
                 allPermissions.add(Manifest.permission.BLUETOOTH)
                 allPermissions.add(Manifest.permission.BLUETOOTH_ADMIN)
             }
-            
+
             // Android 13+ (API 33+) 需要媒体权限
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 allPermissions.add(Manifest.permission.READ_MEDIA_AUDIO)
@@ -234,20 +237,20 @@ class MainActivity : AppCompatActivity() {
                 allPermissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
                 allPermissions.add(Manifest.permission.READ_EXTERNAL_STORAGE)
             }
-            
+
             // 通知权限（Android 13+）
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 allPermissions.add(Manifest.permission.POST_NOTIFICATIONS)
             }
-            
+
             // 录音权限（所有版本）
             allPermissions.add(Manifest.permission.RECORD_AUDIO)
-            
+
             // 过滤掉已授权的权限
             val needRequest = allPermissions.filter {
                 ContextCompat.checkSelfPermission(this, it) != android.content.pm.PackageManager.PERMISSION_GRANTED
             }.toTypedArray()
-            
+
             if (needRequest.isNotEmpty()) {
                 permissionLauncher.launch(needRequest)
             } else {
@@ -259,25 +262,25 @@ class MainActivity : AppCompatActivity() {
             showSnackbar("权限检查失败：${e.message}")
         }
     }
-    
+
     private fun checkBatteryOptimization() {
         try {
             val powerManager = getSystemService(POWER_SERVICE) as android.os.PowerManager
             val isIgnoring = powerManager.isIgnoringBatteryOptimizations(packageName)
-            
+
             if (!isIgnoring) {
                 Log.d(TAG, "App 未忽略电池优化，建议用户设置")
                 // 显示提示，建议用户关闭电池优化
                 showSnackbar("建议关闭电池优化以确保后台监控稳定运行")
             }
-            
+
             checkBluetoothAndStart()
         } catch (e: Exception) {
             Log.e(TAG, "电池优化检查失败", e)
             checkBluetoothAndStart()
         }
     }
-    
+
     private fun checkBluetoothAndStart() {
         try {
             val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
@@ -285,7 +288,7 @@ class MainActivity : AppCompatActivity() {
                 showSnackbar("设备不支持蓝牙")
                 return
             }
-            
+
             if (!bluetoothAdapter.isEnabled) {
                 val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
                 bluetoothEnableLauncher.launch(enableBtIntent)
@@ -297,7 +300,7 @@ class MainActivity : AppCompatActivity() {
             showSnackbar("蓝牙初始化失败：${e.message}")
         }
     }
-    
+
     private fun startMonitorService() {
         try {
             val serviceIntent = Intent(this, BleMonitorService::class.java)
@@ -307,7 +310,7 @@ class MainActivity : AppCompatActivity() {
             showSnackbar("启动监控服务失败：${e.message}")
         }
     }
-    
+
     private fun showSnackbar(message: String) {
         Snackbar.make(binding.root, message, Snackbar.LENGTH_LONG).show()
     }

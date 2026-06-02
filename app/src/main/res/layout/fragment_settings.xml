@@ -11,43 +11,8 @@
         android:orientation="vertical"
         android:padding="16dp">
 
-        <!-- Device Settings -->
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="设备设置"
-            android:textSize="18sp"
-            android:textStyle="bold"
-            android:textColor="@color/text_primary"
-            android:layout_marginBottom="12dp" />
-
-        <com.google.android.material.textfield.TextInputLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="设备名称"
-            style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
-            android:layout_marginBottom="12dp">
-
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/et_device_name"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="iTAG" />
-        </com.google.android.material.textfield.TextInputLayout>
-
-        <com.google.android.material.textfield.TextInputLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="MAC 地址"
-            style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
-            android:layout_marginBottom="16dp">
-
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/et_mac_address"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="FF:FF:11:8C:4E:3B" />
-        </com.google.android.material.textfield.TextInputLayout>
+        <!-- 核心修复：移除"设备设置"标题和设备名称、MAC地址输入框 -->
+        <!-- 设备信息改为在主页动态显示，设置页不再展示固定设备信息 -->
 
         <!-- Alarm Settings -->
         <TextView

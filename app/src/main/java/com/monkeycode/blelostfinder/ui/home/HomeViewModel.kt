@@ -52,8 +52,6 @@ class HomeViewModel @Inject constructor(
         loadDevice()
         observeBleState()
         observeBleEvents()
-        connectToDevice()
-
         // 启动时如果正在响铃，显示弹窗
         if (alarmSoundManager.isPlaying()) {
             _phoneAlarmTriggered.value = true
@@ -61,20 +59,36 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    fun connectToDevice() {
-        try {
-            bleManager.connectDirectly(BleManager.I_DEVICE_MAC)
-            Log.d("HomeViewModel", "已调用 connectDirectly()")
-        } catch (e: Exception) {
-            Log.e("HomeViewModel", "连接失败：${e.message}", e)
+    // 核心修复：改为从数据库加载已保存的设备，而非硬编码MAC
+    // 首次安装无设备时不自动连接；绑定新设备后自动连接
+    private fun loadDevice() {
+        viewModelScope.launch {
+            deviceRepository.allDevices.collect { devices ->
+                val savedDevice = devices.firstOrNull()
+                val hadDevice = _device.value != null
+                _device.value = savedDevice
+
+                // 如果检测到新绑定的设备（之前没有，现在有了），且当前未连接，自动连接
+                if (!hadDevice && savedDevice != null && _connectionState.value is BleConnectionState.Disconnected) {
+                    Log.d("HomeViewModel", "检测到新绑定设备，自动连接: ${savedDevice.macAddress}")
+                    connectToDevice()
+                }
+            }
         }
     }
 
-    private fun loadDevice() {
-        viewModelScope.launch {
-            deviceRepository.getDeviceByMacFlow(BleManager.I_DEVICE_MAC).collect { device: BleDevice? ->
-                _device.value = device
+    // 核心修复：使用已保存设备的MAC进行连接，无设备时不连接
+    fun connectToDevice() {
+        val mac = _device.value?.macAddress
+        if (mac != null) {
+            try {
+                bleManager.connectDirectly(mac)
+                Log.d("HomeViewModel", "已调用 connectDirectly()，MAC=$mac")
+            } catch (e: Exception) {
+                Log.e("HomeViewModel", "连接失败：${e.message}", e)
             }
+        } else {
+            Log.d("HomeViewModel", "没有已保存的设备，跳过自动连接，请进入扫描页绑定")
         }
     }
 

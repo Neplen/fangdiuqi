@@ -34,12 +34,14 @@ class SettingsManager @Inject constructor(
         val MONITORING_ENABLED = booleanPreferencesKey("monitoring_enabled")
     }
 
+    // 核心修复：默认值改为空字符串，表示未绑定设备
     val deviceName: Flow<String> = context.dataStore.data.map { preferences ->
-        preferences[DEVICE_NAME] ?: "iTAG"
+        preferences[DEVICE_NAME] ?: ""
     }
 
+    // 核心修复：默认值改为空字符串，表示未绑定设备
     val deviceMac: Flow<String> = context.dataStore.data.map { preferences ->
-        preferences[DEVICE_MAC] ?: "FF:FF:11:8C:4E:3B"
+        preferences[DEVICE_MAC] ?: ""
     }
 
     // 核心修复：断连自动报警开关，默认开启

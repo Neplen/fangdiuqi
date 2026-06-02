@@ -35,8 +35,8 @@ class BleManager @Inject constructor(
         private var lastDoubleClickTime = 0L
         private const val DOUBLE_CLICK_COOLDOWN = 800L
 
-        const val I_DEVICE_NAME = "iTAG"
-        const val I_DEVICE_MAC = "FF:FF:11:8C:4E:3B"
+        // 已移除硬编码的 I_DEVICE_NAME 和 I_DEVICE_MAC
+        // 设备 MAC 通过 connect()/connectDirectly() 传入并保存到 deviceMacToConnect
 
         val ALERT_SERVICE_UUID = UUID.fromString("00001802-0000-1000-8000-00805f9b34fb")
         val ALERT_LEVEL_CHARACTERISTIC_UUID = UUID.fromString("00002a06-0000-1000-8000-00805f9b34fb")
@@ -162,7 +162,7 @@ class BleManager @Inject constructor(
 
     private val bleCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            Log.d(TAG, "Connection state changed: $status, newState: $newState")
+            Log.d(TAG, "Connection state changed: $status, newState=$newState")
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     _connectionState.value = BleConnectionState.Connected

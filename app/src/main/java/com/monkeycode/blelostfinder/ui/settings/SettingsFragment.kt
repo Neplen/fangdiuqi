@@ -91,11 +91,7 @@ class SettingsFragment : Fragment() {
     private fun setupObservers() {
         viewLifecycleOwner.lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                launch {
-                    viewModel.deviceName.collect { name ->
-                        binding.etDeviceName.setText(name)
-                    }
-                }
+                // 核心修复：移除 deviceName 观察（已删除对应UI）
 
                 launch {
                     viewModel.isDisconnectAlarmEnabled.collect { enabled ->

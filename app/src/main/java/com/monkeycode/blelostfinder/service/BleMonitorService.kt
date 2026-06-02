@@ -73,7 +73,8 @@ class BleMonitorService : Service() {
 
     private var isMonitoring = false
     private var currentDevice: BleDevice? = null
-    private var deviceMac: String = BleManager.I_DEVICE_MAC
+    // 核心修复：移除硬编码 MAC，改为从数据库加载
+    private var deviceMac: String? = null
 
     private var isAlarmPlaying = false
     private var isWifiDndActive = false
@@ -318,21 +319,17 @@ class BleMonitorService : Service() {
         isMonitoring = true
 
         try {
+            // 核心修复：从数据库加载第一个已保存的设备，而非硬编码MAC
             serviceScope.launch {
                 try {
-                    deviceRepository.getDeviceByMac(deviceMac)?.let { device ->
-                        currentDevice = device
-                        Log.d(TAG, "加载设备配置完成")
-                    } ?: run {
-                        val defaultDevice = BleDevice(
-                            macAddress = deviceMac,
-                            name = "iTAG",
-                            rssiThreshold = -90
-                        )
-                        deviceRepository.insertDevice(defaultDevice)
-                        currentDevice = defaultDevice
+                    val savedDevice = deviceRepository.getFirstDevice()
+                    if (savedDevice != null) {
+                        currentDevice = savedDevice
+                        deviceMac = savedDevice.macAddress
+                        Log.d(TAG, "加载已绑定设备: ${savedDevice.name} (${savedDevice.macAddress})")
+                    } else {
+                        Log.d(TAG, "没有已绑定设备，等待用户扫描绑定")
                     }
-                    Log.d(TAG, "设备配置已加载")
                 } catch (e: Exception) {
                     Log.e(TAG, "设备加载失败", e)
                 }
@@ -540,7 +537,7 @@ class BleMonitorService : Service() {
                 is BleConnectionState.Disconnected -> {
                     Log.d(TAG, "Disconnected from device，设备已断开")
 
-                    recordDisconnectionLocation(deviceMac)
+                    recordDisconnectionLocation(deviceMac ?: "")
 
                     currentDevice?.let { device ->
                         deviceRepository.updateDevice(device.copy(

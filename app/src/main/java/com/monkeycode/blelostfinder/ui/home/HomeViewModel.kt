@@ -77,7 +77,8 @@ class HomeViewModel @Inject constructor(
 
             if (hasDevice) {
                 // 已绑定设备，加载设备信息并尝试连接
-                loadDevice(savedMac)
+                // ===== 修复：使用 !! 断言非空，因为 hasDevice 已确认 savedMac 不为 null/empty =====
+                loadDevice(savedMac!!)
                 connectToDevice()
             } else {
                 Log.d("HomeViewModel", "未绑定设备，等待用户扫描绑定")

@@ -84,15 +84,16 @@ class BleMonitorService : Service() {
 
     private var isDisconnectAlarmEnabled = true
 
-    private var deviceAlarmRetriggerTime: Long? = null
-    private val DEVICE_ALARM_RETRY_INTERVAL = 30000L
+    // ==================== 核心修复：新增"用户已确认断连"标志 ====================
+    // 当用户点击弹窗"好的"后，设置为 true，断连期间不再重复触发自动报警
+    // 重新连接后重置为 false
+    private var isDisconnectAlarmAcknowledged = false
 
     private var wifiLock: WifiManager.WifiLock? = null
     private var rssiMonitorJob: kotlinx.coroutines.Job? = null
     private var heartbeatJob: kotlinx.coroutines.Job? = null
     private val HEARTBEAT_INTERVAL = 60000L
 
-    // ==================== 新增：缓存各开关状态，用于统一决策 ====================
     private var cachedWifiDndEnabled = false
     private var cachedScheduleDndEnabled = false
     private var cachedDisconnectAlarmEnabled = true
@@ -102,7 +103,6 @@ class BleMonitorService : Service() {
     private var lastShouldTriggerPhoneAlarm = false
     private var bluetoothDisconnectedTime: Long? = null
 
-    // ==================== 核心修复：记录上次实际同步给防丢器的配置，避免重复写入 ====================
     private var lastSyncedDisconnectAlarmState: Boolean? = null
 
     override fun onCreate() {
@@ -134,6 +134,9 @@ class BleMonitorService : Service() {
                                 Log.d(TAG, "收到外部停止命令，已重置报警状态")
                             }
                         }
+                        // 核心修复：用户点击"好的"确认，标记已知晓断连
+                        isDisconnectAlarmAcknowledged = true
+                        Log.d(TAG, "用户已确认断连报警，当前断连期间不再重复触发")
                     }
                 }
             }
@@ -250,11 +253,6 @@ class BleMonitorService : Service() {
         wifiLock = null
     }
 
-    // ==================== 核心修复：统一同步防丢器断连报警配置（增加去重） ====================
-    /**
-     * 根据当前所有策略状态，计算是否应该开启防丢器断连报警，并同步给防丢器
-     * 在连接状态下，任何策略变化时都应调用此方法
-     */
     private fun syncDeviceAlarmConfig() {
         if (bleManager.connectionState.value !is BleConnectionState.Connected) {
             Log.d(TAG, "设备未连接，跳过同步防丢器配置")
@@ -270,7 +268,6 @@ class BleMonitorService : Service() {
             isDisconnectAlarmEnabled = cachedDisconnectAlarmEnabled
         )
 
-        // 核心修复：去重，状态没变不重复写入，避免占满BLE队列影响手动操作
         if (shouldEnable == lastSyncedDisconnectAlarmState) {
             Log.d(TAG, "防丢器断连报警状态未变化($shouldEnable)，跳过重复同步")
             return
@@ -281,7 +278,7 @@ class BleMonitorService : Service() {
         Log.d(TAG, "已同步防丢器断连报警配置: $shouldEnable (WiFi勿扰=$cachedWifiDndEnabled, WiFi连接=$cachedIsWifiConnected, 定时勿扰=$cachedScheduleDndEnabled, 在时段内=$isInDndRange, 断连开关=$cachedDisconnectAlarmEnabled)")
     }
 
-    // ==================== 核心修复：检查是否需要补偿报警 ====================
+    // ==================== 核心修复：补偿报警也增加"用户已确认"判断 ====================
     private fun checkCompensateAlarm() {
         if (bleManager.connectionState.value is BleConnectionState.Connected) {
             return
@@ -289,9 +286,14 @@ class BleMonitorService : Service() {
         if (isAlarmPlaying) {
             return
         }
+        // 核心修复：用户已确认断连，不再补偿报警
+        if (isDisconnectAlarmAcknowledged) {
+            Log.d(TAG, "用户已确认断连，跳过补偿报警")
+            return
+        }
 
         val currentShouldTrigger = shouldTriggerPhoneAlarm()
-        Log.d(TAG, "补偿报警检查: 之前=$lastShouldTriggerPhoneAlarm, 现在=$currentShouldTrigger, 蓝牙断连时间=$bluetoothDisconnectedTime")
+        Log.d(TAG, "补偿报警检查: 之前=$lastShouldTriggerPhoneAlarm, 现在=$currentShouldTrigger, 蓝牙断连时间=$bluetoothDisconnectedTime, 已确认=$isDisconnectAlarmAcknowledged")
 
         if (!lastShouldTriggerPhoneAlarm && currentShouldTrigger && bluetoothDisconnectedTime != null) {
             serviceScope.launch {
@@ -513,11 +515,11 @@ class BleMonitorService : Service() {
             when (state) {
                 is BleConnectionState.Connected -> {
                     Log.d(TAG, "Connected to device，连接成功")
-                    deviceAlarmRetriggerTime = null
+                    // 核心修复：重新连接后，重置"用户已确认"标志，允许下次断连正常报警
+                    isDisconnectAlarmAcknowledged = false
                     bluetoothDisconnectedTime = null
                     lastShouldTriggerPhoneAlarm = false
 
-                    // 核心修复：连接成功后强制重置同步状态，确保FFE2配置一定会被写入
                     lastSyncedDisconnectAlarmState = null
                     syncDeviceAlarmConfig()
 
@@ -551,8 +553,11 @@ class BleMonitorService : Service() {
                     lastShouldTriggerPhoneAlarm = shouldTriggerPhoneAlarm()
 
                     alarmMutex.withLock {
-                        if (!isAlarmPlaying && shouldTriggerPhoneAlarm()) {
+                        // 核心修复：增加"用户已确认"判断，已确认则不再触发断连自动报警
+                        if (!isAlarmPlaying && shouldTriggerPhoneAlarm() && !isDisconnectAlarmAcknowledged) {
                             triggerPhoneAlarmLocked("断连报警", ignoreDnd = false)
+                        } else if (isDisconnectAlarmAcknowledged) {
+                            Log.d(TAG, "用户已确认断连，跳过断连自动报警")
                         }
                     }
                 }
@@ -682,7 +687,7 @@ class BleMonitorService : Service() {
 
     private fun isWifiConnected(): Boolean {
         return try {
-            val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) 
+            val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE)
                 as? android.net.ConnectivityManager
             val network = connectivityManager?.activeNetwork
             val capabilities = connectivityManager?.getNetworkCapabilities(network)

@@ -230,10 +230,21 @@ class SettingsFragment : Fragment() {
     }
 
     /**
-     * 显示WiFi信息输入对话框（带确定按钮，密码样式输入，显示按钮不关闭对话框）
+     * 显示WiFi信息输入对话框（使用MaterialAlertDialogBuilder，显示按钮通过自定义View实现）
      */
     private fun showWifiInputDialog(title: String, currentValue: String, onSave: (String) -> Unit) {
         val context = requireContext()
+
+        // 创建垂直布局容器
+        val container = android.widget.LinearLayout(context).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(
+                (24 * context.resources.displayMetrics.density).toInt(),
+                (16 * context.resources.displayMetrics.density).toInt(),
+                (24 * context.resources.displayMetrics.density).toInt(),
+                (16 * context.resources.displayMetrics.density).toInt()
+            )
+        }
 
         // 创建输入框
         val input = TextInputEditText(context).apply {
@@ -242,21 +253,39 @@ class SettingsFragment : Fragment() {
             // 密码样式：默认显示为星号
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
             textSize = 16f
-        }
-
-        // 创建容器
-        val container = android.widget.FrameLayout(context).apply {
-            setPadding(
-                (24 * context.resources.displayMetrics.density).toInt(),
-                (16 * context.resources.displayMetrics.density).toInt(),
-                (24 * context.resources.displayMetrics.density).toInt(),
-                (8 * context.resources.displayMetrics.density).toInt()
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
             )
-            addView(input)
         }
 
-        // 使用普通Dialog而不是AlertDialog的setNeutralButton，避免按钮点击关闭对话框
-        val dialog = androidx.appcompat.app.AlertDialog.Builder(context)
+        // 创建显示/隐藏按钮（放在输入框下方）
+        val toggleButton = android.widget.Button(context).apply {
+            text = "显示内容"
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = (8 * context.resources.displayMetrics.density).toInt()
+            }
+            setOnClickListener {
+                val isPassword = (input.inputType and android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD) != 0
+                if (isPassword) {
+                    input.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                    text = "隐藏内容"
+                } else {
+                    input.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+                    text = "显示内容"
+                }
+                // 光标移到最后
+                input.setSelection(input.text?.length ?: 0)
+            }
+        }
+
+        container.addView(input)
+        container.addView(toggleButton)
+
+        MaterialAlertDialogBuilder(context)
             .setTitle(title)
             .setView(container)
             .setPositiveButton("确定") { _, _ ->
@@ -265,41 +294,7 @@ class SettingsFragment : Fragment() {
                 Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("取消", null)
-            .create()
-
-        // 添加"显示/隐藏"按钮到对话框底部，不关闭对话框
-        dialog.setOnShowListener {
-            val showHideButton = dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_NEUTRAL)
-            // 使用自定义按钮布局
-            val buttonPanel = dialog.findViewById<android.view.ViewGroup>(androidx.appcompat.R.id.buttonPanel)
-            if (buttonPanel != null) {
-                // 在确定/取消按钮旁边添加显示按钮
-                val showButton = android.widget.Button(context).apply {
-                    text = "显示"
-                    setOnClickListener {
-                        val isPassword = (input.inputType and android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD) != 0
-                        if (isPassword) {
-                            input.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
-                            text = "隐藏"
-                        } else {
-                            input.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
-                            text = "显示"
-                        }
-                        // 光标移到最后
-                        input.setSelection(input.text?.length ?: 0)
-                    }
-                }
-                // 将按钮添加到按钮面板
-                val layoutParams = android.widget.LinearLayout.LayoutParams(
-                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT,
-                    android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
-                )
-                layoutParams.marginEnd = (8 * context.resources.displayMetrics.density).toInt()
-                buttonPanel.addView(showButton, 0, layoutParams)
-            }
-        }
-
-        dialog.show()
+            .show()
 
         // 确保对话框打开时自动弹出键盘
         input.requestFocus()

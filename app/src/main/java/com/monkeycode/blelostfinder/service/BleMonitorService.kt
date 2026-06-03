@@ -48,6 +48,7 @@ class BleMonitorService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val ACTION_STOP_MONITORING = "com.monkeycode.blelostfinder.STOP_MONITORING"
         const val ACTION_STOP_PHONE_ALARM = "com.monkeycode.blelostfinder.STOP_PHONE_ALARM"
+        const val ACTION_STOP_GO_OUT_REMINDER = "com.monkeycode.blelostfinder.STOP_GO_OUT_REMINDER"
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
@@ -77,7 +78,6 @@ class BleMonitorService : Service() {
 
     private var isMonitoring = false
     private var currentDevice: BleDevice? = null
-    // ===== 修改：deviceMac 改为从 DataStore 读取，不再硬编码 =====
     private var deviceMac: String? = null
 
     private var isAlarmPlaying = false
@@ -94,9 +94,11 @@ class BleMonitorService : Service() {
     private var cachedHomeWifiBssid = ""
 
     // ==================== 核心修复：新增"用户已确认断连"标志 ====================
-    // 当用户点击弹窗"好的"后，设置为 true，断连期间不再重复触发自动报警
-    // 重新连接后重置为 false
     private var isDisconnectAlarmAcknowledged = false
+
+    // ==================== 出门提醒专用状态（与断连报警完全分离）====================
+    private var isGoOutReminderPlaying = false
+    private var isGoOutReminderAcknowledged = false
 
     private var wifiLock: WifiManager.WifiLock? = null
     private var rssiMonitorJob: kotlinx.coroutines.Job? = null
@@ -121,11 +123,11 @@ class BleMonitorService : Service() {
         wifiManager = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
         createNotificationChannel()
         _isRunning.value = true
-        
+
         // 注册 WiFi 监听
         wifiMonitor.register()
         Log.d(TAG, "WiFi monitor registered")
-        
+
         initialize()
     }
 
@@ -151,6 +153,18 @@ class BleMonitorService : Service() {
                         // 核心修复：用户点击"好的"确认，标记已知晓断连
                         isDisconnectAlarmAcknowledged = true
                         Log.d(TAG, "用户已确认断连报警，当前断连期间不再重复触发")
+                    }
+                }
+                ACTION_STOP_GO_OUT_REMINDER -> {
+                    serviceScope.launch {
+                        alarmMutex.withLock {
+                            if (isGoOutReminderPlaying) {
+                                stopGoOutReminderLocked()
+                                Log.d(TAG, "收到外部停止出门提醒命令")
+                            }
+                        }
+                        isGoOutReminderAcknowledged = true
+                        Log.d(TAG, "用户已确认出门提醒，本次不再重复触发")
                     }
                 }
             }
@@ -183,11 +197,11 @@ class BleMonitorService : Service() {
         releaseWakeLock()
         heartbeatJob?.cancel()
         heartbeatJob = null
-        
+
         // 注销 WiFi 监听
         wifiMonitor.unregister()
         Log.d(TAG, "WiFi monitor unregistered")
-        
+
         serviceScope.cancel()
         _isRunning.value = false
         super.onDestroy()
@@ -297,7 +311,6 @@ class BleMonitorService : Service() {
         Log.d(TAG, "已同步防丢器断连报警配置: $shouldEnable (WiFi勿扰=$cachedWifiDndEnabled, WiFi连接=$cachedIsWifiConnected, 定时勿扰=$cachedScheduleDndEnabled, 在时段内=$isInDndRange, 断连开关=$cachedDisconnectAlarmEnabled)")
     }
 
-    // ==================== 核心修复：补偿报警也增加"用户已确认"判断 ====================
     private fun checkCompensateAlarm() {
         if (bleManager.connectionState.value is BleConnectionState.Connected) {
             return
@@ -337,7 +350,6 @@ class BleMonitorService : Service() {
         isMonitoring = true
 
         try {
-            // ===== 修改：从 DataStore 读取已保存的设备 MAC，不再硬编码 =====
             serviceScope.launch {
                 try {
                     val savedMac = settingsManager.deviceMac.firstOrNull()
@@ -469,29 +481,44 @@ class BleMonitorService : Service() {
                 }
             }
 
+            // ==================== 出门提醒核心逻辑（修复版）====================
             serviceScope.launch {
                 try {
                     wifiMonitor.wifiDisconnectedEvent.collectLatest { wifiInfo ->
                         wifiInfo?.let { info ->
-                            Log.d(TAG, "WiFi 断开：SSID=${info.ssid}, BSSID=${info.bssid}")
-                            
+                            Log.d(TAG, "WiFi 断开事件：SSID=${info.ssid}, BSSID=${info.bssid}")
+
                             if (!cachedGoOutReminderEnabled) {
                                 Log.d(TAG, "出门提醒功能关闭，忽略")
                                 return@collectLatest
                             }
-                            
+
+                            // 重置出门提醒确认状态（每次WiFi断开都是新的事件）
+                            isGoOutReminderAcknowledged = false
+
+                            // 检查是否是家庭 WiFi
                             val isHomeWifi = wifiMonitor.isHomeWifi(
                                 ssid = info.ssid,
                                 bssid = info.bssid,
                                 homeSsid = cachedHomeWifiSsid,
                                 homeBssid = cachedHomeWifiBssid
                             )
-                            
-                            if (isHomeWifi) {
-                                Log.d(TAG, "检测到断开家庭 WiFi，触发提醒")
+
+                            if (!isHomeWifi) {
+                                Log.d(TAG, "非家庭 WiFi，忽略出门提醒")
+                                return@collectLatest
+                            }
+
+                            // 检查断连报警条件是否也满足——如果满足，优先触发断连报警，不触发出门提醒
+                            val shouldTriggerDisconnectAlarm = shouldTriggerPhoneAlarm()
+                            if (shouldTriggerDisconnectAlarm) {
+                                Log.d(TAG, "断连报警条件也满足，优先触发断连报警，跳过出门提醒")
+                                return@collectLatest
+                            }
+
+                            Log.d(TAG, "检测到断开家庭 WiFi，且断连报警不触发，准备触发出门提醒")
+                            alarmMutex.withLock {
                                 triggerGoOutReminderLocked()
-                            } else {
-                                Log.d(TAG, "非家庭 WiFi，忽略")
                             }
                         }
                     }
@@ -561,7 +588,6 @@ class BleMonitorService : Service() {
                 val connectionState = bleManager.connectionState.value
                 if (connectionState is BleConnectionState.Disconnected) {
                     Log.d(TAG, "心跳检测：设备断开，触发重连")
-                    // ===== 修改：使用 deviceMac（从 DataStore 读取）进行重连 =====
                     deviceMac?.let { mac ->
                         bleManager.reconnectIfDisconnected(mac)
                     } ?: Log.d(TAG, "未绑定设备，跳过重连")
@@ -579,6 +605,7 @@ class BleMonitorService : Service() {
         serviceScope.launch {
             alarmMutex.withLock {
                 stopAlarmIfPlayingLocked()
+                stopGoOutReminderLocked()
             }
         }
         Log.d(TAG, "Monitoring stopped")
@@ -592,7 +619,6 @@ class BleMonitorService : Service() {
                 val connectionState = bleManager.connectionState.value
 
                 if (connectionState is BleConnectionState.Disconnected) {
-                    // ===== 修改：使用 deviceMac（从 DataStore 读取）进行重连 =====
                     deviceMac?.let { mac ->
                         bleManager.reconnectIfDisconnected(mac)
                     } ?: Log.d(TAG, "未绑定设备，跳过重连")
@@ -620,6 +646,14 @@ class BleMonitorService : Service() {
                             stopAlarmIfPlayingLocked()
                         }
                         Log.d(TAG, "设备已重连，立即停止所有报警")
+                    }
+
+                    // 设备重连时，如果出门提醒正在播放，也停止它
+                    if (isGoOutReminderPlaying) {
+                        alarmMutex.withLock {
+                            stopGoOutReminderLocked()
+                        }
+                        Log.d(TAG, "设备已重连，停止出门提醒")
                     }
 
                     currentDevice?.let { device ->
@@ -731,21 +765,38 @@ class BleMonitorService : Service() {
         }
     }
 
+    // ==================== 出门提醒专用触发逻辑（与断连报警完全分离）====================
     private suspend fun triggerGoOutReminderLocked() {
+        if (isGoOutReminderAcknowledged) {
+            Log.d(TAG, "出门提醒已确认，跳过")
+            return
+        }
+
+        if (isGoOutReminderPlaying) {
+            Log.d(TAG, "出门提醒已在播放中，跳过重复触发")
+            return
+        }
+
         Log.d(TAG, "触发出门提醒铃声")
-        
+
         try {
+            // 停止可能正在播放的断连报警铃声（避免重叠）
             alarmSoundManager.stopPlaying()
+
+            isGoOutReminderPlaying = true
+
             val ringtonePath = settingsManager.goOutRingtonePath.firstOrNull()
             alarmSoundManager.playAlarm(ringtonePath)
-            
+
+            // 发送广播显示弹窗
             val intent = Intent("com.monkeycode.blelostfinder.SHOW_GO_OUT_REMINDER")
             intent.setPackage(packageName)
             sendBroadcast(intent)
-            
+
             Log.d(TAG, "出门提醒铃声已触发，广播已发送")
         } catch (e: Exception) {
             Log.e(TAG, "触发出门提醒失败", e)
+            isGoOutReminderPlaying = false
         }
     }
 
@@ -753,6 +804,12 @@ class BleMonitorService : Service() {
         isAlarmPlaying = false
         bleManager.stopAlarm()
         alarmSoundManager.stopPlaying()
+    }
+
+    private fun stopGoOutReminderLocked() {
+        isGoOutReminderPlaying = false
+        alarmSoundManager.stopPlaying()
+        Log.d(TAG, "出门提醒已停止")
     }
 
     private fun stopAlarmIfPlaying() {

@@ -20,6 +20,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.timepicker.MaterialTimePicker
 import com.google.android.material.timepicker.TimeFormat
 import com.monkeycode.blelostfinder.databinding.FragmentSettingsBinding
@@ -37,35 +38,39 @@ class SettingsFragment : Fragment() {
     private val viewModel: SettingsViewModel by viewModels()
 
     private var currentMediaPlayer: MediaPlayer? = null
-    
-    // 出门提醒铃声预览
     private var goOutReminderMediaPlayer: MediaPlayer? = null
 
     companion object {
         private const val TAG = "SettingsFragment"
     }
 
-    // 本地音频文件选择器
-    private val filePickerLauncher = registerForActivityResult(
+    // 本地音频文件选择器（报警铃声）
+    private val alarmFilePickerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
             result.data?.data?.let { uri ->
-                // 根据当前焦点判断是保存哪种铃声
-                if (binding.btnGoOutRingtone.hasFocus()) {
-                    viewModel.saveGoOutRingtonePath(uri.toString())
-                    previewGoOutRingtone(uri)
-                    Toast.makeText(requireContext(), "已选择出门提醒铃声", Toast.LENGTH_SHORT).show()
-                } else {
-                    viewModel.saveRingtoneUri(uri.toString())
-                    previewRingtone(uri)
-                    Toast.makeText(requireContext(), "已选择本地铃声", Toast.LENGTH_SHORT).show()
-                }
+                viewModel.saveRingtoneUri(uri.toString())
+                previewRingtone(uri)
+                Toast.makeText(requireContext(), "已选择报警铃声", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
-    // 系统铃声选择器（新增）
+    // 本地音频文件选择器（出门提醒铃声）
+    private val goOutFilePickerLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            result.data?.data?.let { uri ->
+                viewModel.saveGoOutRingtonePath(uri.toString())
+                previewGoOutRingtone(uri)
+                Toast.makeText(requireContext(), "已选择出门提醒铃声", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // 系统铃声选择器
     private val systemRingtonePickerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -101,8 +106,6 @@ class SettingsFragment : Fragment() {
     private fun setupObservers() {
         viewLifecycleOwner.lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                // ===== 修改：删除 deviceName 监听（设置页不再显示设备名称输入框） =====
-
                 launch {
                     viewModel.isDisconnectAlarmEnabled.collect { enabled ->
                         binding.switchDisconnectAlarm.isChecked = enabled
@@ -132,22 +135,23 @@ class SettingsFragment : Fragment() {
                         binding.tvEndTime.text = time
                     }
                 }
-                
+
                 launch {
                     viewModel.isGoOutReminderEnabled.collect { enabled ->
                         binding.switchGoOutReminder.isChecked = enabled
                     }
                 }
-                
+
+                // 显示已保存的WiFi信息（只显示前几位+星号，保护隐私）
                 launch {
                     viewModel.homeWifiSsid.collect { ssid ->
-                        binding.etHomeWifiSsid.setText(ssid)
+                        binding.tvHomeWifiSsidValue.text = maskString(ssid)
                     }
                 }
-                
+
                 launch {
                     viewModel.homeWifiBssid.collect { bssid ->
-                        binding.etHomeWifiBssid.setText(bssid)
+                        binding.tvHomeWifiBssidValue.text = maskString(bssid)
                     }
                 }
             }
@@ -194,27 +198,101 @@ class SettingsFragment : Fragment() {
         binding.btnRingtone.setOnClickListener {
             showRingtonePicker()
         }
-        
+
         binding.switchGoOutReminder.setOnCheckedChangeListener { _, isChecked ->
             viewModel.updateGoOutReminderEnabled(isChecked)
         }
-        
+
         binding.btnGoOutRingtone.setOnClickListener {
             showGoOutRingtonePicker()
         }
-        
-        // 保存 WiFi 信息
-        binding.etHomeWifiSsid.setOnFocusChangeListener { _, hasFocus ->
-            if (!hasFocus) {
-                saveHomeWifiConfig()
-            }
+
+        // 点击显示WiFi信息区域，弹出对话框编辑
+        binding.layoutHomeWifiSsid.setOnClickListener {
+            showWifiInputDialog(
+                title = "家庭 WiFi 名称 (SSID)",
+                currentValue = viewModel.homeWifiSsid.value,
+                onSave = { value ->
+                    viewModel.saveHomeWifi(value, viewModel.homeWifiBssid.value)
+                }
+            )
         }
-        
-        binding.etHomeWifiBssid.setOnFocusChangeListener { _, hasFocus ->
-            if (!hasFocus) {
-                saveHomeWifiConfig()
-            }
+
+        binding.layoutHomeWifiBssid.setOnClickListener {
+            showWifiInputDialog(
+                title = "家庭路由器 MAC 地址 (BSSID)",
+                currentValue = viewModel.homeWifiBssid.value,
+                onSave = { value ->
+                    viewModel.saveHomeWifi(viewModel.homeWifiSsid.value, value)
+                }
+            )
         }
+    }
+
+    /**
+     * 显示WiFi信息输入对话框（带确定按钮，密码样式输入）
+     */
+    private fun showWifiInputDialog(title: String, currentValue: String, onSave: (String) -> Unit) {
+        val context = requireContext()
+
+        // 创建输入框
+        val input = TextInputEditText(context).apply {
+            setText(currentValue)
+            hint = title
+            // 密码样式：默认显示为星号
+            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+            // 设置字体等
+            textSize = 16f
+        }
+
+        // 创建TextInputLayout包装（可选，这里直接用AlertDialog的内置样式）
+        val container = android.widget.FrameLayout(context).apply {
+            setPadding(
+                (24 * context.resources.displayMetrics.density).toInt(),
+                (16 * context.resources.displayMetrics.density).toInt(),
+                (24 * context.resources.displayMetrics.density).toInt(),
+                (8 * context.resources.displayMetrics.density).toInt()
+            )
+            addView(input)
+        }
+
+        val dialog = MaterialAlertDialogBuilder(context)
+            .setTitle(title)
+            .setView(container)
+            .setPositiveButton("确定") { _, _ ->
+                val value = input.text.toString().trim()
+                onSave(value)
+                Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("取消", null)
+            .setNeutralButton("显示") { _, _ ->
+                // 切换显示/隐藏
+                val currentType = input.inputType
+                val isPassword = (currentType and android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD) != 0
+                if (isPassword) {
+                    input.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                } else {
+                    input.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+                }
+                // 光标移到最后
+                input.setSelection(input.text?.length ?: 0)
+            }
+            .show()
+
+        // 确保对话框打开时自动弹出键盘
+        input.requestFocus()
+        input.post {
+            val imm = context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+            imm.showSoftInput(input, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
+        }
+    }
+
+    /**
+     * 字符串脱敏显示（保留前3位，其余用*代替）
+     */
+    private fun maskString(input: String): String {
+        if (input.length <= 3) return input
+        return input.take(3) + "*".repeat(input.length - 3)
     }
 
     private fun showTimePicker(callback: (hour: Int, minute: Int) -> Unit) {
@@ -256,7 +334,7 @@ class SettingsFragment : Fragment() {
                         alarmUri?.let { previewRingtone(it) }
                         Toast.makeText(requireContext(), "已选择报警声", Toast.LENGTH_SHORT).show()
                     }
-                    1 -> openFilePicker()
+                    1 -> openAlarmFilePicker()
                     2 -> openSystemRingtonePicker()
                 }
                 dialog.dismiss()
@@ -265,16 +343,15 @@ class SettingsFragment : Fragment() {
             .show()
     }
 
-    private fun openFilePicker() {
+    private fun openAlarmFilePicker() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "audio/*"
             putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("audio/mp3", "audio/wav", "audio/mpeg", "audio/ogg"))
         }
-        filePickerLauncher.launch(intent)
+        alarmFilePickerLauncher.launch(intent)
     }
 
-    // 新增：打开系统闹钟铃声选择器
     private fun openSystemRingtonePicker() {
         val intent = Intent(RingtoneManager.ACTION_RINGTONE_PICKER).apply {
             putExtra(RingtoneManager.EXTRA_RINGTONE_TYPE, RingtoneManager.TYPE_ALARM)
@@ -326,26 +403,19 @@ class SettingsFragment : Fragment() {
             currentMediaPlayer = null
         }
     }
-    
-    private fun saveHomeWifiConfig() {
-        val ssid = binding.etHomeWifiSsid.text.toString().trim()
-        val bssid = binding.etHomeWifiBssid.text.toString().trim()
-        viewModel.saveHomeWifi(ssid, bssid)
-        Log.d(TAG, "Saved home WiFi config: SSID=$ssid, BSSID=$bssid")
-    }
-    
+
     private fun showGoOutRingtonePicker() {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "audio/*"
             putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("audio/mp3", "audio/wav", "audio/mpeg", "audio/ogg"))
         }
-        filePickerLauncher.launch(intent)
+        goOutFilePickerLauncher.launch(intent)
     }
-    
+
     private fun previewGoOutRingtone(uri: android.net.Uri) {
         stopGoOutPreview()
-        
+
         try {
             goOutReminderMediaPlayer = MediaPlayer().apply {
                 setDataSource(requireContext(), uri)
@@ -360,18 +430,18 @@ class SettingsFragment : Fragment() {
                 isLooping = false
                 start()
             }
-            
+
             goOutReminderMediaPlayer?.setOnCompletionListener {
                 stopGoOutPreview()
             }
-            
+
             Log.d(TAG, "Previewing go out reminder ringtone")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to preview go out reminder ringtone", e)
             Toast.makeText(requireContext(), "预览失败", Toast.LENGTH_SHORT).show()
         }
     }
-    
+
     private fun stopGoOutPreview() {
         try {
             goOutReminderMediaPlayer?.let {

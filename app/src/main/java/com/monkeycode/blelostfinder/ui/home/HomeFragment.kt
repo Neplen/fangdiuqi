@@ -39,10 +39,10 @@ class HomeFragment : Fragment() {
     private var isAlarmPlaying = false
     // 弹窗引用
     private var alarmDialog: androidx.appcompat.app.AlertDialog? = null
-    
+
     // 出门提醒弹窗引用
     private var goOutReminderDialog: androidx.appcompat.app.AlertDialog? = null
-    
+
     // 广播接收器
     private val goOutReminderReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -67,7 +67,7 @@ class HomeFragment : Fragment() {
 
         setupObservers()
         setupClickListeners()
-        
+
         // 注册广播接收器
         val filter = IntentFilter("com.monkeycode.blelostfinder.SHOW_GO_OUT_REMINDER")
         requireContext().registerReceiver(goOutReminderReceiver, filter)
@@ -83,7 +83,13 @@ class HomeFragment : Fragment() {
             showPhoneAlarmDialog()
         }
 
-        // ===== 修改：只有已绑定设备且当前断开时才自动重连 =====
+        // 如果正在出门提醒，显示弹窗
+        if (viewModel.goOutReminderTriggered.value) {
+            Log.d("HomeFragment", "onResume: 检测出门提醒状态，显示弹窗")
+            showGoOutReminderDialog()
+        }
+
+        // 只有已绑定设备且当前断开时才自动重连
         if (viewModel.isDeviceBound.value) {
             val currentState = viewModel.connectionState.value
             if (currentState is BleConnectionState.Disconnected) {
@@ -103,7 +109,6 @@ class HomeFragment : Fragment() {
                     }
                 }
 
-                // ===== 修改：监听已连接设备名称（从 BleManager 实时获取） =====
                 launch {
                     viewModel.connectedDeviceName.collect { name ->
                         binding.tvDeviceName.text = name ?: "未连接"
@@ -152,13 +157,21 @@ class HomeFragment : Fragment() {
                     }
                 }
 
+                // 新增：监听出门提醒触发状态
+                launch {
+                    viewModel.goOutReminderTriggered.collect { triggered ->
+                        if (triggered) {
+                            showGoOutReminderDialog()
+                        }
+                    }
+                }
+
                 launch {
                     viewModel.isMonitoringRunning.collect { isRunning ->
                         updateMonitorSwitch(isRunning)
                     }
                 }
 
-                // ===== 新增：监听设备绑定状态，未绑定时提示去扫描 =====
                 launch {
                     viewModel.isDeviceBound.collect { isBound ->
                         if (!isBound) {
@@ -180,7 +193,6 @@ class HomeFragment : Fragment() {
                 binding.btnConnectDevice.isEnabled = false
             }
             is BleConnectionState.Disconnected -> {
-                // ===== 修改：根据是否已绑定显示不同文本 =====
                 if (viewModel.isDeviceBound.value) {
                     binding.btnConnectDevice.text = "连接"
                 } else {
@@ -201,7 +213,6 @@ class HomeFragment : Fragment() {
     }
 
     private fun updateMonitorSwitch(isRunning: Boolean) {
-        // 只有当开关当前状态与服务状态不一致时才更新，避免触发 onCheckedChanged
         if (binding.switchMonitor.isChecked != isRunning) {
             binding.switchMonitor.isChecked = isRunning
         }
@@ -213,13 +224,10 @@ class HomeFragment : Fragment() {
         }
 
         binding.btnConnectDevice.setOnClickListener {
-            // ===== 修改：未绑定设备时跳转扫描页，已绑定则强制重新连接 =====
             if (!viewModel.isDeviceBound.value) {
                 findNavController().navigate(R.id.action_scan)
                 Snackbar.make(binding.root, "请先扫描并绑定防丢器", Snackbar.LENGTH_SHORT).show()
             } else {
-                // 核心修复：点击"连接"按钮时，强制重新连接
-                // 解决"超过 40 秒回到范围，显示已断开，点击连接无效"的问题
                 connectToDevice()
                 Snackbar.make(binding.root, "正在连接设备...", Snackbar.LENGTH_SHORT).show()
             }
@@ -239,23 +247,17 @@ class HomeFragment : Fragment() {
     }
 
     private fun connectToDevice() {
-        // 核心修复：停止手机报警（如果正在报警）
-        // 解决"回到范围后手机仍在报警，打开 APP 点击连接"的场景
         viewModel.stopPhoneAlarm()
-
-        // 触发重连
         viewModel.connectToDevice()
     }
 
     private fun toggleDeviceAlarm() {
         if (isAlarmPlaying) {
-            // 停止报警
             viewModel.stopDeviceAlarm()
             isAlarmPlaying = false
             updateAlarmButton(false)
             Snackbar.make(binding.root, "已停止报警", Snackbar.LENGTH_SHORT).show()
         } else {
-            // 启动报警
             viewModel.startDeviceAlarm()
             isAlarmPlaying = true
             updateAlarmButton(true)
@@ -273,10 +275,8 @@ class HomeFragment : Fragment() {
         }
     }
 
-    // 核心修复：弹窗消息文字改为 24sp
     private fun showPhoneAlarmDialog() {
         alarmDialog?.dismiss()
-        // ===== 修改：弹窗标题使用实际设备名称 =====
         val deviceName = viewModel.connectedDeviceName.value
             ?: viewModel.device.value?.name
             ?: "防丢器"
@@ -299,11 +299,17 @@ class HomeFragment : Fragment() {
             .setCancelable(false)
             .show()
     }
-    
+
     // 显示出门提醒弹窗
     private fun showGoOutReminderDialog() {
+        // 如果报警弹窗正在显示，不显示出门提醒弹窗（报警优先级更高）
+        if (alarmDialog?.isShowing == true) {
+            Log.d("HomeFragment", "报警弹窗正在显示，跳过出门提醒弹窗")
+            return
+        }
+
         goOutReminderDialog?.dismiss()
-        
+
         val message = SpannableString("主人，主人，检查一下，你的钥匙带没带？")
         message.setSpan(
             AbsoluteSizeSpan(24, true),
@@ -311,20 +317,20 @@ class HomeFragment : Fragment() {
             message.length,
             Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
         )
-        
+
         goOutReminderDialog = MaterialAlertDialogBuilder(requireContext())
             .setTitle("出门提醒")
             .setMessage(message)
             .setPositiveButton("好的") { _, _ ->
-                viewModel.stopPhoneAlarm()
+                viewModel.stopGoOutReminder()
                 dismissGoOutReminderDialog()
             }
             .setCancelable(false)
             .show()
-            
+
         Log.d("HomeFragment", "出门提醒弹窗已显示")
     }
-    
+
     private fun dismissGoOutReminderDialog() {
         goOutReminderDialog?.dismiss()
         goOutReminderDialog = null
@@ -361,10 +367,6 @@ class HomeFragment : Fragment() {
         }
     }
 
-    private fun updateDeviceState(device: BleDevice) {
-        // 由 connectedDeviceName Flow 处理动态名称
-    }
-
     private fun updateDistance(rssi: Int) {
         val distance = when {
             rssi > -70 -> "1 米内"
@@ -379,14 +381,15 @@ class HomeFragment : Fragment() {
         dismissAlarmDialog()
         dismissGoOutReminderDialog()
         viewModel.stopPhoneAlarm()
-        
+        viewModel.stopGoOutReminder()
+
         try {
             requireContext().unregisterReceiver(goOutReminderReceiver)
             Log.d("HomeFragment", "Go out reminder receiver unregistered")
         } catch (e: Exception) {
             Log.e("HomeFragment", "Unregister receiver failed", e)
         }
-        
+
         super.onDestroyView()
         _binding = null
     }

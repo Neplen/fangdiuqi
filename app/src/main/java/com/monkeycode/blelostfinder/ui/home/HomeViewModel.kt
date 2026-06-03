@@ -40,7 +40,6 @@ class HomeViewModel @Inject constructor(
     val rssi: StateFlow<Int> = bleManager.rssi
     val batteryLevel: StateFlow<Int> = bleManager.batteryLevel
 
-    // ===== 修改：新增已连接设备名称 Flow，从 BleManager 实时获取 =====
     val connectedDeviceName: StateFlow<String?> = bleManager.connectedDeviceName
 
     private val _isDeviceAlarmPlaying = MutableStateFlow(false)
@@ -51,7 +50,10 @@ class HomeViewModel @Inject constructor(
     private val _phoneAlarmTriggered = MutableStateFlow(false)
     val phoneAlarmTriggered: StateFlow<Boolean> = _phoneAlarmTriggered.asStateFlow()
 
-    // ===== 修改：新增是否已绑定设备标志 =====
+    // 新增：出门提醒弹窗触发状态（独立于断连报警）
+    private val _goOutReminderTriggered = MutableStateFlow(false)
+    val goOutReminderTriggered: StateFlow<Boolean> = _goOutReminderTriggered.asStateFlow()
+
     private val _isDeviceBound = MutableStateFlow(false)
     val isDeviceBound: StateFlow<Boolean> = _isDeviceBound.asStateFlow()
 
@@ -67,7 +69,6 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    // ===== 修改：检查是否已绑定设备（从 DataStore 读取 MAC） =====
     private fun checkDeviceBound() {
         viewModelScope.launch {
             val savedMac = settingsManager.deviceMac.firstOrNull()
@@ -76,8 +77,6 @@ class HomeViewModel @Inject constructor(
             Log.d("HomeViewModel", "设备绑定状态: $hasDevice, MAC=$savedMac")
 
             if (hasDevice) {
-                // 已绑定设备，加载设备信息并尝试连接
-                // ===== 修复：使用 !! 断言非空，因为 hasDevice 已确认 savedMac 不为 null/empty =====
                 loadDevice(savedMac!!)
                 connectToDevice()
             } else {
@@ -86,7 +85,6 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    // ===== 修改：connectToDevice 从 DataStore 读取 MAC，不再硬编码 =====
     fun connectToDevice() {
         viewModelScope.launch {
             try {
@@ -104,7 +102,6 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    // ===== 修改：loadDevice 使用传入的 MAC，不再硬编码 =====
     private fun loadDevice(macAddress: String) {
         viewModelScope.launch {
             deviceRepository.getDeviceByMacFlow(macAddress).collect { device: BleDevice? ->
@@ -125,8 +122,6 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    // 核心修复：双击事件只处理弹窗，响铃由 Service 全权负责
-    // 弹窗状态根据实际响铃状态设置，避免和 AlarmTriggered 事件时序竞争
     private fun observeBleEvents() {
         viewModelScope.launch {
             bleManager.bleEvents.collect { event ->
@@ -135,15 +130,11 @@ class HomeViewModel @Inject constructor(
                         Log.d("HomeViewModel", "检测到防丢器单击，忽略")
                     }
                     is BleEvent.DoubleButtonPressed -> {
-                        // 核心修复：根据实际响铃状态设置弹窗，而不是切换状态
-                        // 这样无论 AlarmTriggered 和 DoubleButtonPressed 谁先谁后，
-                        // 最终弹窗状态都和实际响铃状态一致
                         val isPlaying = alarmSoundManager.isPlaying()
                         _phoneAlarmTriggered.value = isPlaying
-                        Log.d("HomeViewModel", "检测到防丢器双击，响铃状态=$isPlaying，弹窗=${isPlaying}")
+                        Log.d("HomeViewModel", "检测到防丢器双击，响铃状态=$isPlaying，弹窗=$isPlaying")
                     }
                     is BleEvent.AlarmTriggered -> {
-                        // Service 触发报警（断连或双击），显示弹窗
                         Log.d("HomeViewModel", "收到报警事件：${event.reason}")
                         if (!_phoneAlarmTriggered.value) {
                             _phoneAlarmTriggered.value = true
@@ -219,7 +210,7 @@ class HomeViewModel @Inject constructor(
             }
             try {
                 context.startService(stopIntent)
-                Log.d("HomeViewModel", "已通知 Service 重置报警状态")
+                Log.d("HomeViewModel", "已通知 Service 重置断连报警状态")
             } catch (e: Exception) {
                 Log.e("HomeViewModel", "通知 Service 失败", e)
             }
@@ -230,8 +221,37 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 停止出门提醒（独立方法，不影响断连报警状态）
+     */
+    fun stopGoOutReminder() {
+        try {
+            alarmSoundManager.stopPlaying()
+            _goOutReminderTriggered.value = false
+
+            val context = getApplication<Application>().applicationContext
+            val stopIntent = Intent(context, BleMonitorService::class.java).apply {
+                action = BleMonitorService.ACTION_STOP_GO_OUT_REMINDER
+            }
+            try {
+                context.startService(stopIntent)
+                Log.d("HomeViewModel", "已通知 Service 停止出门提醒")
+            } catch (e: Exception) {
+                Log.e("HomeViewModel", "通知 Service 停止出门提醒失败", e)
+            }
+
+            Log.d("HomeViewModel", "停止出门提醒")
+        } catch (e: Exception) {
+            Log.e("HomeViewModel", "停止出门提醒失败", e)
+        }
+    }
+
     fun clearPhoneAlertDialog() {
         _phoneAlarmTriggered.value = false
+    }
+
+    fun clearGoOutReminderDialog() {
+        _goOutReminderTriggered.value = false
     }
 
     fun startMonitoring() {

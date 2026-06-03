@@ -37,6 +37,9 @@ class SettingsFragment : Fragment() {
     private val viewModel: SettingsViewModel by viewModels()
 
     private var currentMediaPlayer: MediaPlayer? = null
+    
+    // 出门提醒铃声预览
+    private var goOutReminderMediaPlayer: MediaPlayer? = null
 
     companion object {
         private const val TAG = "SettingsFragment"
@@ -48,9 +51,16 @@ class SettingsFragment : Fragment() {
     ) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
             result.data?.data?.let { uri ->
-                viewModel.saveRingtoneUri(uri.toString())
-                previewRingtone(uri)
-                Toast.makeText(requireContext(), "已选择本地铃声", Toast.LENGTH_SHORT).show()
+                // 根据当前焦点判断是保存哪种铃声
+                if (binding.btnGoOutRingtone.hasFocus()) {
+                    viewModel.saveGoOutRingtonePath(uri.toString())
+                    previewGoOutRingtone(uri)
+                    Toast.makeText(requireContext(), "已选择出门提醒铃声", Toast.LENGTH_SHORT).show()
+                } else {
+                    viewModel.saveRingtoneUri(uri.toString())
+                    previewRingtone(uri)
+                    Toast.makeText(requireContext(), "已选择本地铃声", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
@@ -122,6 +132,24 @@ class SettingsFragment : Fragment() {
                         binding.tvEndTime.text = time
                     }
                 }
+                
+                launch {
+                    viewModel.isGoOutReminderEnabled.collect { enabled ->
+                        binding.switchGoOutReminder.isChecked = enabled
+                    }
+                }
+                
+                launch {
+                    viewModel.homeWifiSsid.collect { ssid ->
+                        binding.etHomeWifiSsid.setText(ssid)
+                    }
+                }
+                
+                launch {
+                    viewModel.homeWifiBssid.collect { bssid ->
+                        binding.etHomeWifiBssid.setText(bssid)
+                    }
+                }
             }
         }
     }
@@ -165,6 +193,27 @@ class SettingsFragment : Fragment() {
 
         binding.btnRingtone.setOnClickListener {
             showRingtonePicker()
+        }
+        
+        binding.switchGoOutReminder.setOnCheckedChangeListener { _, isChecked ->
+            viewModel.updateGoOutReminderEnabled(isChecked)
+        }
+        
+        binding.btnGoOutRingtone.setOnClickListener {
+            showGoOutRingtonePicker()
+        }
+        
+        // 保存 WiFi 信息
+        binding.etHomeWifiSsid.setOnFocusChangeListener { _, hasFocus ->
+            if (!hasFocus) {
+                saveHomeWifiConfig()
+            }
+        }
+        
+        binding.etHomeWifiBssid.setOnFocusChangeListener { _, hasFocus ->
+            if (!hasFocus) {
+                saveHomeWifiConfig()
+            }
         }
     }
 
@@ -277,9 +326,70 @@ class SettingsFragment : Fragment() {
             currentMediaPlayer = null
         }
     }
+    
+    private fun saveHomeWifiConfig() {
+        val ssid = binding.etHomeWifiSsid.text.toString().trim()
+        val bssid = binding.etHomeWifiBssid.text.toString().trim()
+        viewModel.saveHomeWifi(ssid, bssid)
+        Log.d(TAG, "Saved home WiFi config: SSID=$ssid, BSSID=$bssid")
+    }
+    
+    private fun showGoOutRingtonePicker() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "audio/*"
+            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("audio/mp3", "audio/wav", "audio/mpeg", "audio/ogg"))
+        }
+        filePickerLauncher.launch(intent)
+    }
+    
+    private fun previewGoOutRingtone(uri: android.net.Uri) {
+        stopGoOutPreview()
+        
+        try {
+            goOutReminderMediaPlayer = MediaPlayer().apply {
+                setDataSource(requireContext(), uri)
+                setAudioStreamType(AudioManager.STREAM_RING)
+                setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ALARM)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+                prepare()
+                isLooping = false
+                start()
+            }
+            
+            goOutReminderMediaPlayer?.setOnCompletionListener {
+                stopGoOutPreview()
+            }
+            
+            Log.d(TAG, "Previewing go out reminder ringtone")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to preview go out reminder ringtone", e)
+            Toast.makeText(requireContext(), "预览失败", Toast.LENGTH_SHORT).show()
+        }
+    }
+    
+    private fun stopGoOutPreview() {
+        try {
+            goOutReminderMediaPlayer?.let {
+                if (it.isPlaying) {
+                    it.stop()
+                }
+                it.release()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping go out preview", e)
+        } finally {
+            goOutReminderMediaPlayer = null
+        }
+    }
 
     override fun onDestroyView() {
         stopPreview()
+        stopGoOutPreview()
         super.onDestroyView()
         _binding = null
     }

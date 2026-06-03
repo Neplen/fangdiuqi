@@ -32,6 +32,11 @@ class SettingsManager @Inject constructor(
         val ALARM_RINGTONE_PATH = stringPreferencesKey("alarm_ringtone_path")
         val AUTO_START_ENABLED = booleanPreferencesKey("auto_start_enabled")
         val MONITORING_ENABLED = booleanPreferencesKey("monitoring_enabled")
+        // 出门提醒功能配置
+        val GO_OUT_REMINDER_ENABLED = booleanPreferencesKey("go_out_reminder_enabled")
+        val HOME_WIFI_SSID = stringPreferencesKey("home_wifi_ssid")
+        val HOME_WIFI_BSSID = stringPreferencesKey("home_wifi_bssid")
+        val GO_OUT_RINGTONE_PATH = stringPreferencesKey("go_out_ringtone_path")
     }
 
     // ===== 修改：deviceName 和 deviceMac 默认值改为空字符串 =====
@@ -71,6 +76,23 @@ class SettingsManager @Inject constructor(
 
     val isMonitoringEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
         preferences[MONITORING_ENABLED] ?: false
+    }
+
+    // 出门提醒功能配置
+    val isGoOutReminderEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
+        preferences[GO_OUT_REMINDER_ENABLED] ?: false
+    }
+
+    val homeWifiSsid: Flow<String> = context.dataStore.data.map { preferences ->
+        preferences[HOME_WIFI_SSID] ?: ""
+    }
+
+    val homeWifiBssid: Flow<String> = context.dataStore.data.map { preferences ->
+        preferences[HOME_WIFI_BSSID] ?: ""
+    }
+
+    val goOutRingtonePath: Flow<String?> = context.dataStore.data.map { preferences ->
+        preferences[GO_OUT_RINGTONE_PATH]
     }
 
     suspend fun updateDeviceName(name: String) {
@@ -124,6 +146,30 @@ class SettingsManager @Inject constructor(
     suspend fun updateMonitoringEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[MONITORING_ENABLED] = enabled
+        }
+    }
+
+    // 出门提醒功能配置
+    suspend fun updateGoOutReminderEnabled(enabled: Boolean) {
+        context.dataStore.edit { preferences ->
+            preferences[GO_OUT_REMINDER_ENABLED] = enabled
+        }
+    }
+
+    suspend fun saveHomeWifi(ssid: String, bssid: String) {
+        context.dataStore.edit { preferences ->
+            preferences[HOME_WIFI_SSID] = ssid
+            preferences[HOME_WIFI_BSSID] = bssid
+        }
+    }
+
+    suspend fun updateGoOutRingtonePath(path: String?) {
+        context.dataStore.edit { preferences ->
+            if (path != null) {
+                preferences[GO_OUT_RINGTONE_PATH] = path
+            } else {
+                preferences.remove(GO_OUT_RINGTONE_PATH)
+            }
         }
     }
 }

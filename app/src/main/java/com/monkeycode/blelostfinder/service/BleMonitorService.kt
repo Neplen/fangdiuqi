@@ -29,6 +29,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.launchIn
@@ -64,6 +65,9 @@ class BleMonitorService : Service() {
     @Inject
     lateinit var alarmSoundManager: AlarmSoundManager
 
+    @Inject
+    lateinit var wifiMonitor: WifiMonitor
+
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val alarmMutex = Mutex()
 
@@ -84,6 +88,10 @@ class BleMonitorService : Service() {
     private var dndEndTime = "08:00"
 
     private var isDisconnectAlarmEnabled = true
+
+    private var cachedGoOutReminderEnabled = false
+    private var cachedHomeWifiSsid = ""
+    private var cachedHomeWifiBssid = ""
 
     // ==================== 核心修复：新增"用户已确认断连"标志 ====================
     // 当用户点击弹窗"好的"后，设置为 true，断连期间不再重复触发自动报警
@@ -113,6 +121,11 @@ class BleMonitorService : Service() {
         wifiManager = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
         createNotificationChannel()
         _isRunning.value = true
+        
+        // 注册 WiFi 监听
+        wifiMonitor.register()
+        Log.d(TAG, "WiFi monitor registered")
+        
         initialize()
     }
 
@@ -170,6 +183,11 @@ class BleMonitorService : Service() {
         releaseWakeLock()
         heartbeatJob?.cancel()
         heartbeatJob = null
+        
+        // 注销 WiFi 监听
+        wifiMonitor.unregister()
+        Log.d(TAG, "WiFi monitor unregistered")
+        
         serviceScope.cancel()
         _isRunning.value = false
         super.onDestroy()
@@ -411,10 +429,74 @@ class BleMonitorService : Service() {
                 try {
                     settingsManager.dndEndTime.collect { time ->
                         dndEndTime = time
-                        Log.d(TAG, "定时勿扰结束时间: $time")
+                        Log.d(TAG, "定时勿扰结束时间：$time")
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "定时勿扰结束时间监听失败", e)
+                }
+            }
+
+            serviceScope.launch {
+                try {
+                    settingsManager.isGoOutReminderEnabled.collectLatest { enabled ->
+                        cachedGoOutReminderEnabled = enabled
+                        Log.d(TAG, "出门提醒开关：$enabled")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "出门提醒开关监听失败", e)
+                }
+            }
+
+            serviceScope.launch {
+                try {
+                    settingsManager.homeWifiSsid.collectLatest { ssid ->
+                        cachedHomeWifiSsid = ssid
+                        Log.d(TAG, "家庭 WiFi SSID: $ssid")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "家庭 WiFi SSID 监听失败", e)
+                }
+            }
+
+            serviceScope.launch {
+                try {
+                    settingsManager.homeWifiBssid.collectLatest { bssid ->
+                        cachedHomeWifiBssid = bssid
+                        Log.d(TAG, "家庭 WiFi BSSID: $bssid")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "家庭 WiFi BSSID 监听失败", e)
+                }
+            }
+
+            serviceScope.launch {
+                try {
+                    wifiMonitor.wifiDisconnectedEvent.collectLatest { wifiInfo ->
+                        wifiInfo?.let { info ->
+                            Log.d(TAG, "WiFi 断开：SSID=${info.ssid}, BSSID=${info.bssid}")
+                            
+                            if (!cachedGoOutReminderEnabled) {
+                                Log.d(TAG, "出门提醒功能关闭，忽略")
+                                return@collectLatest
+                            }
+                            
+                            val isHomeWifi = wifiMonitor.isHomeWifi(
+                                ssid = info.ssid,
+                                bssid = info.bssid,
+                                homeSsid = cachedHomeWifiSsid,
+                                homeBssid = cachedHomeWifiBssid
+                            )
+                            
+                            if (isHomeWifi) {
+                                Log.d(TAG, "检测到断开家庭 WiFi，触发提醒")
+                                triggerGoOutReminderLocked()
+                            } else {
+                                Log.d(TAG, "非家庭 WiFi，忽略")
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "WiFi 断开事件监听失败", e)
                 }
             }
 
@@ -646,6 +728,24 @@ class BleMonitorService : Service() {
         } catch (e: Exception) {
             Log.e(TAG, "触发报警失败", e)
             isAlarmPlaying = false
+        }
+    }
+
+    private suspend fun triggerGoOutReminderLocked() {
+        Log.d(TAG, "触发出门提醒铃声")
+        
+        try {
+            alarmSoundManager.stopPlaying()
+            val ringtonePath = settingsManager.goOutRingtonePath.firstOrNull()
+            alarmSoundManager.playAlarm(ringtonePath)
+            
+            val intent = Intent("com.monkeycode.blelostfinder.SHOW_GO_OUT_REMINDER")
+            intent.setPackage(packageName)
+            sendBroadcast(intent)
+            
+            Log.d(TAG, "出门提醒铃声已触发，广播已发送")
+        } catch (e: Exception) {
+            Log.e(TAG, "触发出门提醒失败", e)
         }
     }
 

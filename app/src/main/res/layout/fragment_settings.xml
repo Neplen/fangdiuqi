@@ -42,6 +42,67 @@
             style="@style/Widget.Material3.Button.OutlinedButton"
             android:layout_marginBottom="16dp" />
 
+        <!-- 出门提醒功能 -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="出门提醒"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="@color/text_primary"
+            android:layout_marginBottom="12dp" />
+
+        <com.google.android.material.switchmaterial.SwitchMaterial
+            android:id="@+id/switch_go_out_reminder"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="开启出门提醒"
+            android:textSize="14sp"
+            android:checked="false"
+            android:layout_marginBottom="12dp" />
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/et_home_wifi_ssid_layout"
+            style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="家庭 WiFi 名称 (SSID)"
+            android:layout_marginBottom="12dp"
+            app:passwordToggleEnabled="true">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/et_home_wifi_ssid"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="text"
+                android:maxLines="1" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/et_home_wifi_bssid_layout"
+            style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="家庭路由器 MAC 地址 (BSSID)"
+            android:layout_marginBottom="12dp"
+            app:passwordToggleEnabled="true">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/et_home_wifi_bssid"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="text"
+                android:maxLines="1" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btn_go_out_ringtone"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="选择出门提醒铃声"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_marginBottom="16dp" />
+
         <!-- DND Settings -->
         <TextView
             android:layout_width="wrap_content"

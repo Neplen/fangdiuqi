@@ -1,5 +1,9 @@
 package com.monkeycode.blelostfinder.ui.home
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Bundle
 import android.text.Spannable
 import android.text.SpannableString
@@ -35,6 +39,19 @@ class HomeFragment : Fragment() {
     private var isAlarmPlaying = false
     // 弹窗引用
     private var alarmDialog: androidx.appcompat.app.AlertDialog? = null
+    
+    // 出门提醒弹窗引用
+    private var goOutReminderDialog: androidx.appcompat.app.AlertDialog? = null
+    
+    // 广播接收器
+    private val goOutReminderReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == "com.monkeycode.blelostfinder.SHOW_GO_OUT_REMINDER") {
+                Log.d("HomeFragment", "收到出门提醒广播，显示弹窗")
+                showGoOutReminderDialog()
+            }
+        }
+    }
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -50,6 +67,11 @@ class HomeFragment : Fragment() {
 
         setupObservers()
         setupClickListeners()
+        
+        // 注册广播接收器
+        val filter = IntentFilter("com.monkeycode.blelostfinder.SHOW_GO_OUT_REMINDER")
+        requireContext().registerReceiver(goOutReminderReceiver, filter)
+        Log.d("HomeFragment", "Go out reminder receiver registered")
     }
 
     override fun onResume() {
@@ -277,6 +299,36 @@ class HomeFragment : Fragment() {
             .setCancelable(false)
             .show()
     }
+    
+    // 显示出门提醒弹窗
+    private fun showGoOutReminderDialog() {
+        goOutReminderDialog?.dismiss()
+        
+        val message = SpannableString("主人，主人，检查一下，你的钥匙带没带？")
+        message.setSpan(
+            AbsoluteSizeSpan(24, true),
+            0,
+            message.length,
+            Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
+        
+        goOutReminderDialog = MaterialAlertDialogBuilder(requireContext())
+            .setTitle("出门提醒")
+            .setMessage(message)
+            .setPositiveButton("好的") { _, _ ->
+                viewModel.stopPhoneAlarm()
+                dismissGoOutReminderDialog()
+            }
+            .setCancelable(false)
+            .show()
+            
+        Log.d("HomeFragment", "出门提醒弹窗已显示")
+    }
+    
+    private fun dismissGoOutReminderDialog() {
+        goOutReminderDialog?.dismiss()
+        goOutReminderDialog = null
+    }
 
     private fun dismissAlarmDialog() {
         alarmDialog?.dismiss()
@@ -325,7 +377,16 @@ class HomeFragment : Fragment() {
 
     override fun onDestroyView() {
         dismissAlarmDialog()
+        dismissGoOutReminderDialog()
         viewModel.stopPhoneAlarm()
+        
+        try {
+            requireContext().unregisterReceiver(goOutReminderReceiver)
+            Log.d("HomeFragment", "Go out reminder receiver unregistered")
+        } catch (e: Exception) {
+            Log.e("HomeFragment", "Unregister receiver failed", e)
+        }
+        
         super.onDestroyView()
         _binding = null
     }

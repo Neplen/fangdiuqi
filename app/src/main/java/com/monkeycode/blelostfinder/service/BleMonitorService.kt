@@ -93,10 +93,10 @@ class BleMonitorService : Service() {
     private var cachedHomeWifiSsid = ""
     private var cachedHomeWifiBssid = ""
 
-    // ==================== 核心修复：新增"用户已确认断连"标志 ====================
+    // 核心修复：新增"用户已确认断连"标志
     private var isDisconnectAlarmAcknowledged = false
 
-    // ==================== 出门提醒专用状态（与断连报警完全分离）====================
+    // 出门提醒专用状态（与断连报警完全分离）
     private var isGoOutReminderPlaying = false
     private var isGoOutReminderAcknowledged = false
 
@@ -482,44 +482,43 @@ class BleMonitorService : Service() {
             }
 
             // ==================== 出门提醒核心逻辑（修复版）====================
+            // 使用 collect 而不是 collectLatest，确保每次事件都处理
             serviceScope.launch {
                 try {
-                    wifiMonitor.wifiDisconnectedEvent.collectLatest { wifiInfo ->
-                        wifiInfo?.let { info ->
-                            Log.d(TAG, "WiFi 断开事件：SSID=${info.ssid}, BSSID=${info.bssid}")
+                    wifiMonitor.wifiDisconnectedEvent.collect { wifiInfo ->
+                        Log.d(TAG, "WiFi 断开事件：SSID=${wifiInfo.ssid}, BSSID=${wifiInfo.bssid}")
 
-                            if (!cachedGoOutReminderEnabled) {
-                                Log.d(TAG, "出门提醒功能关闭，忽略")
-                                return@collectLatest
-                            }
+                        if (!cachedGoOutReminderEnabled) {
+                            Log.d(TAG, "出门提醒功能关闭，忽略")
+                            return@collect
+                        }
 
-                            // 重置出门提醒确认状态（每次WiFi断开都是新的事件）
-                            isGoOutReminderAcknowledged = false
+                        // 重置出门提醒确认状态（每次WiFi断开都是新的事件）
+                        isGoOutReminderAcknowledged = false
 
-                            // 检查是否是家庭 WiFi
-                            val isHomeWifi = wifiMonitor.isHomeWifi(
-                                ssid = info.ssid,
-                                bssid = info.bssid,
-                                homeSsid = cachedHomeWifiSsid,
-                                homeBssid = cachedHomeWifiBssid
-                            )
+                        // 检查是否是家庭 WiFi
+                        val isHomeWifi = wifiMonitor.isHomeWifi(
+                            ssid = wifiInfo.ssid,
+                            bssid = wifiInfo.bssid,
+                            homeSsid = cachedHomeWifiSsid,
+                            homeBssid = cachedHomeWifiBssid
+                        )
 
-                            if (!isHomeWifi) {
-                                Log.d(TAG, "非家庭 WiFi，忽略出门提醒")
-                                return@collectLatest
-                            }
+                        if (!isHomeWifi) {
+                            Log.d(TAG, "非家庭 WiFi，忽略出门提醒")
+                            return@collect
+                        }
 
-                            // 检查断连报警条件是否也满足——如果满足，优先触发断连报警，不触发出门提醒
-                            val shouldTriggerDisconnectAlarm = shouldTriggerPhoneAlarm()
-                            if (shouldTriggerDisconnectAlarm) {
-                                Log.d(TAG, "断连报警条件也满足，优先触发断连报警，跳过出门提醒")
-                                return@collectLatest
-                            }
+                        // 检查断连报警条件是否也满足——如果满足，优先触发断连报警，不触发出门提醒
+                        val shouldTriggerDisconnectAlarm = shouldTriggerPhoneAlarm()
+                        if (shouldTriggerDisconnectAlarm) {
+                            Log.d(TAG, "断连报警条件也满足，优先触发断连报警，跳过出门提醒")
+                            return@collect
+                        }
 
-                            Log.d(TAG, "检测到断开家庭 WiFi，且断连报警不触发，准备触发出门提醒")
-                            alarmMutex.withLock {
-                                triggerGoOutReminderLocked()
-                            }
+                        Log.d(TAG, "检测到断开家庭 WiFi，且断连报警不触发，准备触发出门提醒")
+                        alarmMutex.withLock {
+                            triggerGoOutReminderLocked()
                         }
                     }
                 } catch (e: Exception) {
@@ -765,7 +764,7 @@ class BleMonitorService : Service() {
         }
     }
 
-    // ==================== 出门提醒专用触发逻辑（与断连报警完全分离）====================
+    // 出门提醒专用触发逻辑（与断连报警完全分离）
     private suspend fun triggerGoOutReminderLocked() {
         if (isGoOutReminderAcknowledged) {
             Log.d(TAG, "出门提醒已确认，跳过")

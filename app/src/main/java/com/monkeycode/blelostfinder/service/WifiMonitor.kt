@@ -5,14 +5,13 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
-import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -37,9 +36,9 @@ class WifiMonitor @Inject constructor(
     private var lastKnownBssid: String? = null
     private var lastKnownWifiConnected = false
 
-    // WiFi 断开事件（携带断开前的 WiFi 信息）
-    private val _wifiDisconnectedEvent = MutableStateFlow<HomeWifiInfo?>(null)
-    val wifiDisconnectedEvent: StateFlow<HomeWifiInfo?> = _wifiDisconnectedEvent.asStateFlow()
+    // WiFi 断开事件——使用 SharedFlow 确保每次都能触发，即使值相同
+    private val _wifiDisconnectedEvent = MutableSharedFlow<HomeWifiInfo>(extraBufferCapacity = 1)
+    val wifiDisconnectedEvent: SharedFlow<HomeWifiInfo> = _wifiDisconnectedEvent.asSharedFlow()
 
     private var isRegistered = false
 
@@ -68,7 +67,7 @@ class WifiMonitor @Inject constructor(
 
             connectivityManager.registerNetworkCallback(request, networkCallback)
             isRegistered = true
-            Log.d(TAG, "WiFi monitor registered")
+            Log.d(TAG, "WiFi monitor registered, current WiFi: ssid=$lastKnownSsid, bssid=$lastKnownBssid")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to register WiFi monitor", e)
         }
@@ -97,15 +96,15 @@ class WifiMonitor @Inject constructor(
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             // WiFi 网络可用，更新当前信息
-            Log.d(TAG, "WiFi network available")
+            Log.d(TAG, "onAvailable: WiFi network available")
             updateCurrentWifiInfo()
         }
 
         override fun onLost(network: Network) {
             // WiFi 网络丢失
-            Log.d(TAG, "WiFi network lost")
+            Log.d(TAG, "onLost: WiFi network lost")
 
-            // 使用最后已知的 WiFi 信息（在 onLost 前通过 onCapabilitiesChanged 或 onAvailable 更新的）
+            // 使用最后已知的 WiFi 信息
             val disconnectedSsid = lastKnownSsid
             val disconnectedBssid = lastKnownBssid
             val wasWifiConnected = lastKnownWifiConnected
@@ -117,7 +116,7 @@ class WifiMonitor @Inject constructor(
 
             if (wasWifiConnected && disconnectedSsid != null && disconnectedBssid != null) {
                 Log.d(TAG, "WiFi disconnected: SSID=$disconnectedSsid, BSSID=$disconnectedBssid")
-                _wifiDisconnectedEvent.value = HomeWifiInfo(disconnectedSsid, disconnectedBssid)
+                _wifiDisconnectedEvent.tryEmit(HomeWifiInfo(disconnectedSsid, disconnectedBssid))
             } else {
                 Log.d(TAG, "WiFi lost but no valid last known info, ignoring")
             }

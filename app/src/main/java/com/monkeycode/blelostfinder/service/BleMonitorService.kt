@@ -308,7 +308,7 @@ class BleMonitorService : Service() {
 
         bleManager.setDisconnectAlarmEnabled(shouldEnable)
         lastSyncedDisconnectAlarmState = shouldEnable
-        Log.d(TAG, "已同步防丢器断连报警配置: $shouldEnabled (WiFi勿扰=$cachedWifiDndEnabled, WiFi连接=$cachedIsWifiConnected, 定时勿扰=$cachedScheduleDndEnabled, 在时段内=$isInDndRange, 断连开关=$cachedDisconnectAlarmEnabled)")
+        Log.d(TAG, "已同步防丢器断连报警配置: $shouldEnable (WiFi勿扰=$cachedWifiDndEnabled, WiFi连接=$cachedIsWifiConnected, 定时勿扰=$cachedScheduleDndEnabled, 在时段内=$isInDndRange, 断连开关=$cachedDisconnectAlarmEnabled)")
     }
 
     private fun checkCompensateAlarm() {
@@ -490,6 +490,12 @@ class BleMonitorService : Service() {
 
                         if (!cachedGoOutReminderEnabled) {
                             Log.d(TAG, "出门提醒功能关闭，忽略")
+                            return@collect
+                        }
+
+                        // 新增：定时勿扰时段内，不触发出门提醒（避免路由器凌晨重启惊醒用户）
+                        if (isScheduleDndEnabled && isInDndTimeRange()) {
+                            Log.d(TAG, "定时勿扰生效中，跳过出门提醒")
                             return@collect
                         }
 

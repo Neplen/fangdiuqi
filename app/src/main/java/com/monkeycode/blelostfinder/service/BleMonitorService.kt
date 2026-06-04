@@ -308,7 +308,7 @@ class BleMonitorService : Service() {
 
         bleManager.setDisconnectAlarmEnabled(shouldEnable)
         lastSyncedDisconnectAlarmState = shouldEnable
-        Log.d(TAG, "已同步防丢器断连报警配置: $shouldEnable (WiFi勿扰=$cachedWifiDndEnabled, WiFi连接=$cachedIsWifiConnected, 定时勿扰=$cachedScheduleDndEnabled, 在时段内=$isInDndRange, 断连开关=$cachedDisconnectAlarmEnabled)")
+        Log.d(TAG, "已同步防丢器断连报警配置: $shouldEnabled (WiFi勿扰=$cachedWifiDndEnabled, WiFi连接=$cachedIsWifiConnected, 定时勿扰=$cachedScheduleDndEnabled, 在时段内=$isInDndRange, 断连开关=$cachedDisconnectAlarmEnabled)")
     }
 
     private fun checkCompensateAlarm() {

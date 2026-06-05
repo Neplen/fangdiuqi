@@ -253,14 +253,14 @@ class SettingsFragment : Fragment() {
                 topMargin = (8 * context.resources.displayMetrics.density).toInt()
             }
             setOnClickListener {
-                // 修复：使用独立布尔变量跟踪状态，避免 inputType 位运算判断失效
-                val isCurrentlyVisible = (input.inputType and android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD) != 0
+                // 修复：使用独立布尔变量跟踪显示/隐藏状态，彻底摆脱 inputType 位运算困扰
+                val isCurrentlyVisible = input.inputType == (android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD)
                 if (isCurrentlyVisible) {
-                    // 当前可见，切换为隐藏（密码模式）
+                    // 当前是可见模式，切换为隐藏（密码模式）
                     input.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
                     text = "显示内容"
                 } else {
-                    // 当前隐藏，切换为可见
+                    // 当前是隐藏模式，切换为可见
                     input.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
                     text = "隐藏内容"
                 }

@@ -9,7 +9,6 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiManager
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
@@ -21,8 +20,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * WiFi 状态监听器
- * 结合 NetworkCallback + WiFi 广播 + 定时轮询，确保可靠检测 WiFi 断开
+ * WiFi 状态监听器（事件驱动版，无轮询）
+ * 结合 NetworkCallback + WiFi 广播，系统回调触发，零轮询耗电
  */
 @Singleton
 class WifiMonitor @Inject constructor(
@@ -35,9 +34,9 @@ class WifiMonitor @Inject constructor(
     private val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
     private val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
 
-    // 保存当前连接的 WiFi 信息
-    private var lastKnownSsid: String? = null
-    private var lastKnownWifiConnected = false
+    // 缓存当前连接的 WiFi SSID，断开时用于判断
+    private var cachedSsid: String? = null
+    private var isWifiConnected = false
 
     // WiFi 断开事件——使用 SharedFlow 确保每次都能触发
     private val _wifiDisconnectedEvent = MutableSharedFlow<HomeWifiInfo>(extraBufferCapacity = 1)
@@ -47,8 +46,6 @@ class WifiMonitor @Inject constructor(
     private var defaultNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private var wifiNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private var wifiStateReceiver: BroadcastReceiver? = null
-    private var pollHandler: Handler? = null
-    private var pollRunnable: Runnable? = null
 
     data class HomeWifiInfo(
         val ssid: String
@@ -64,8 +61,8 @@ class WifiMonitor @Inject constructor(
         }
 
         try {
-            // 初始获取当前 WiFi 信息
-            updateCurrentWifiInfo()
+            // 初始获取当前 WiFi 信息并缓存
+            updateAndCacheWifiInfo()
 
             // 方案1：注册默认网络回调
             registerDefaultNetworkCallback()
@@ -76,11 +73,8 @@ class WifiMonitor @Inject constructor(
             // 方案3：注册 WiFi 状态广播
             registerWifiStateReceiver()
 
-            // 方案4：启动定时轮询（每5秒检查一次WiFi状态）
-            startPolling()
-
             isRegistered = true
-            Log.d(TAG, "WiFi monitor registered, current WiFi: ssid=$lastKnownSsid, connected=$lastKnownWifiConnected")
+            Log.d(TAG, "WiFi monitor registered (event-driven, no polling), current SSID: $cachedSsid")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to register WiFi monitor", e)
         }
@@ -110,15 +104,9 @@ class WifiMonitor @Inject constructor(
                 wifiStateReceiver = null
             }
 
-            pollRunnable?.let {
-                pollHandler?.removeCallbacks(it)
-                pollRunnable = null
-            }
-            pollHandler = null
-
             isRegistered = false
-            lastKnownSsid = null
-            lastKnownWifiConnected = false
+            cachedSsid = null
+            isWifiConnected = false
             Log.d(TAG, "WiFi monitor unregistered")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to unregister WiFi monitor", e)
@@ -135,7 +123,7 @@ class WifiMonitor @Inject constructor(
                 Log.d(TAG, "DefaultNetworkCallback: onAvailable")
                 // 延迟检查，等待WiFi信息更新
                 Handler(Looper.getMainLooper()).postDelayed({
-                    updateCurrentWifiInfo()
+                    updateAndCacheWifiInfo()
                 }, 1000)
             }
 
@@ -152,7 +140,7 @@ class WifiMonitor @Inject constructor(
                 super.onCapabilitiesChanged(network, networkCapabilities)
                 if (networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
                     Log.d(TAG, "DefaultNetworkCallback: WiFi capabilities changed")
-                    updateCurrentWifiInfo()
+                    updateAndCacheWifiInfo()
                 }
             }
         }
@@ -167,7 +155,6 @@ class WifiMonitor @Inject constructor(
 
     /**
      * 注册WiFi网络专用回调
-     * 使用NetworkRequest专门监听WiFi网络，不依赖默认网络
      */
     private fun registerWifiNetworkCallback() {
         val request = NetworkRequest.Builder()
@@ -178,16 +165,14 @@ class WifiMonitor @Inject constructor(
             override fun onAvailable(network: Network) {
                 super.onAvailable(network)
                 Log.d(TAG, "WifiNetworkCallback: onAvailable")
-                // WiFi网络可用，更新信息
                 Handler(Looper.getMainLooper()).postDelayed({
-                    updateCurrentWifiInfo()
+                    updateAndCacheWifiInfo()
                 }, 1000)
             }
 
             override fun onLost(network: Network) {
                 super.onLost(network)
                 Log.d(TAG, "WifiNetworkCallback: onLost")
-                // WiFi网络丢失，强制触发断开
                 handleWifiLost("WifiNetworkCallback")
             }
 
@@ -223,7 +208,7 @@ class WifiMonitor @Inject constructor(
                             WifiManager.WIFI_STATE_ENABLED -> {
                                 Log.d(TAG, "WiFi enabled")
                                 Handler(Looper.getMainLooper()).postDelayed({
-                                    updateCurrentWifiInfo()
+                                    updateAndCacheWifiInfo()
                                 }, 2000)
                             }
                         }
@@ -234,7 +219,7 @@ class WifiMonitor @Inject constructor(
                         Log.d(TAG, "Network state changed: ${networkInfo?.state}, connected=${networkInfo?.isConnected}")
                         if (networkInfo?.isConnected == true) {
                             Handler(Looper.getMainLooper()).postDelayed({
-                                updateCurrentWifiInfo()
+                                updateAndCacheWifiInfo()
                             }, 1000)
                         } else if (networkInfo?.state == android.net.NetworkInfo.State.DISCONNECTED) {
                             handleWifiLost("NetworkStateBroadcast")
@@ -265,67 +250,28 @@ class WifiMonitor @Inject constructor(
     }
 
     /**
-     * 启动定时轮询
-     * 每5秒检查一次WiFi状态，确保状态正确
-     */
-    private fun startPolling() {
-        pollHandler = Handler(Looper.getMainLooper())
-        pollRunnable = object : Runnable {
-            override fun run() {
-                try {
-                    val previousState = lastKnownWifiConnected
-                    val previousSsid = lastKnownSsid
-
-                    updateCurrentWifiInfo()
-
-                    // 如果之前连接但现在断开，触发事件
-                    if (previousState && !lastKnownWifiConnected) {
-                        if (previousSsid != null) {
-                            Log.d(TAG, "Poll detected WiFi disconnect: SSID=$previousSsid")
-                            _wifiDisconnectedEvent.tryEmit(HomeWifiInfo(previousSsid))
-                        }
-                    }
-
-                    // 如果之前断开但现在连接，更新状态
-                    if (!previousState && lastKnownWifiConnected) {
-                        Log.d(TAG, "Poll detected WiFi connect: SSID=$lastKnownSsid")
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Poll error", e)
-                }
-
-                pollHandler?.postDelayed(this, 5000)
-            }
-        }
-        pollHandler?.postDelayed(pollRunnable!!, 5000)
-        Log.d(TAG, "WiFi polling started")
-    }
-
-    /**
      * 处理 WiFi 断开
-     * 修复：即使lastKnownWifiConnected为false，如果lastKnownSsid不为null，也emit事件
+     * 使用缓存的 SSID，无需轮询也能知道断开的是哪个 WiFi
      */
     private fun handleWifiLost(source: String) {
-        val disconnectedSsid = lastKnownSsid
-        val wasWifiConnected = lastKnownWifiConnected
+        val disconnectedSsid = cachedSsid
 
         // 重置状态
-        lastKnownWifiConnected = false
-        lastKnownSsid = null
+        isWifiConnected = false
+        cachedSsid = null
 
-        // 修复：只要有SSID，就emit事件，不强制要求wasWifiConnected
         if (disconnectedSsid != null) {
-            Log.d(TAG, "WiFi disconnected from $source: SSID=$disconnectedSsid, wasConnected=$wasWifiConnected")
+            Log.d(TAG, "WiFi disconnected from $source: SSID=$disconnectedSsid")
             _wifiDisconnectedEvent.tryEmit(HomeWifiInfo(disconnectedSsid))
         } else {
-            Log.d(TAG, "WiFi lost from $source but no valid SSID, ignoring")
+            Log.d(TAG, "WiFi lost from $source but no cached SSID, ignoring")
         }
     }
 
     /**
-     * 更新当前 WiFi 信息
+     * 更新并缓存当前 WiFi 信息
      */
-    private fun updateCurrentWifiInfo() {
+    private fun updateAndCacheWifiInfo() {
         try {
             val wifiInfo = wifiManager.connectionInfo
             val ssid = wifiInfo?.ssid
@@ -336,22 +282,15 @@ class WifiMonitor @Inject constructor(
                 bssid != null && bssid != "02:00:00:00:00:00") {
                 val newSsid = normalizeSsid(ssid)
 
-                lastKnownSsid = newSsid
-                lastKnownWifiConnected = true
+                cachedSsid = newSsid
+                isWifiConnected = true
 
-                Log.d(TAG, "WiFi info updated: SSID=$newSsid, BSSID=$bssid")
+                Log.d(TAG, "WiFi info cached: SSID=$newSsid, BSSID=$bssid")
             } else {
                 Log.d(TAG, "Not connected to valid WiFi: ssid=$ssid, bssid=$bssid")
-                // 如果之前连接但现在无效，可能是断开了
-                if (lastKnownWifiConnected) {
-                    handleWifiLost("UpdateCurrentWifiInfo")
-                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to get WiFi info", e)
-            if (lastKnownWifiConnected) {
-                handleWifiLost("UpdateCurrentWifiInfoException")
-            }
         }
     }
 
@@ -378,6 +317,6 @@ class WifiMonitor @Inject constructor(
      * 获取当前 WiFi 连接状态
      */
     fun isCurrentlyConnectedToWifi(): Boolean {
-        return lastKnownWifiConnected
+        return isWifiConnected
     }
 }

@@ -91,7 +91,6 @@ class BleMonitorService : Service() {
 
     private var cachedGoOutReminderEnabled = false
     private var cachedHomeWifiSsid = ""
-    private var cachedHomeWifiBssid = ""
 
     // 核心修复：新增"用户已确认断连"标志
     private var isDisconnectAlarmAcknowledged = false
@@ -470,25 +469,14 @@ class BleMonitorService : Service() {
                 }
             }
 
-            serviceScope.launch {
-                try {
-                    settingsManager.homeWifiBssid.collectLatest { bssid ->
-                        cachedHomeWifiBssid = bssid
-                        Log.d(TAG, "家庭 WiFi BSSID: $bssid")
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "家庭 WiFi BSSID 监听失败", e)
-                }
-            }
-
             // ==================== 出门提醒核心逻辑（修复版）====================
             // 使用 collect 而不是 collectLatest，确保每次事件都处理
             serviceScope.launch {
                 try {
                     Log.d(TAG, "开始监听WiFi断开事件...")
                     wifiMonitor.wifiDisconnectedEvent.collect { wifiInfo ->
-                        Log.d(TAG, "收到WiFi断开事件：SSID=${wifiInfo.ssid}, BSSID=${wifiInfo.bssid}")
-                        Log.d(TAG, "当前状态：出门提醒开关=$cachedGoOutReminderEnabled, 定时勿扰=$isScheduleDndEnabled, 在时段内=${isInDndTimeRange()}, 家庭SSID=$cachedHomeWifiSsid, 家庭BSSID=$cachedHomeWifiBssid")
+                        Log.d(TAG, "收到WiFi断开事件：SSID=${wifiInfo.ssid}")
+                        Log.d(TAG, "当前状态：出门提醒开关=$cachedGoOutReminderEnabled, 定时勿扰=$isScheduleDndEnabled, 在时段内=${isInDndTimeRange()}, 家庭SSID=$cachedHomeWifiSsid")
 
                         if (!cachedGoOutReminderEnabled) {
                             Log.d(TAG, "出门提醒功能关闭，忽略")
@@ -507,11 +495,9 @@ class BleMonitorService : Service() {
                         // 检查是否是家庭 WiFi
                         val isHomeWifi = wifiMonitor.isHomeWifi(
                             ssid = wifiInfo.ssid,
-                            bssid = wifiInfo.bssid,
-                            homeSsid = cachedHomeWifiSsid,
-                            homeBssid = cachedHomeWifiBssid
+                            homeSsid = cachedHomeWifiSsid
                         )
-                        Log.d(TAG, "WiFi匹配检查：isHomeWifi=$isHomeWifi, 输入SSID=${wifiInfo.ssid}, 输入BSSID=${wifiInfo.bssid}, 家庭SSID=$cachedHomeWifiSsid, 家庭BSSID=$cachedHomeWifiBssid")
+                        Log.d(TAG, "WiFi匹配检查：isHomeWifi=$isHomeWifi, 输入SSID=${wifiInfo.ssid}, 家庭SSID=$cachedHomeWifiSsid")
 
                         if (!isHomeWifi) {
                             Log.d(TAG, "非家庭 WiFi，忽略出门提醒")

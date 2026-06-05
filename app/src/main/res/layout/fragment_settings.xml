@@ -217,41 +217,6 @@
                 android:contentDescription="编辑" />
         </LinearLayout>
 
-        <!-- 家庭路由器BSSID（只读显示，点击弹出对话框编辑） -->
-        <LinearLayout
-            android:id="@+id/layout_home_wifi_bssid"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:background="?attr/selectableItemBackground"
-            android:padding="12dp"
-            android:layout_marginBottom="12dp">
-
-            <TextView
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="家庭路由器 MAC 地址 (BSSID)"
-                android:textSize="14sp"
-                android:textColor="@color/text_primary" />
-
-            <TextView
-                android:id="@+id/tv_home_wifi_bssid_value"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="未设置"
-                android:textSize="14sp"
-                android:textColor="@color/text_secondary"
-                android:layout_marginEnd="8dp" />
-
-            <ImageView
-                android:layout_width="24dp"
-                android:layout_height="24dp"
-                android:src="@android:drawable/ic_menu_edit"
-                android:contentDescription="编辑" />
-        </LinearLayout>
-
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btn_go_out_ringtone"
             android:layout_width="match_parent"

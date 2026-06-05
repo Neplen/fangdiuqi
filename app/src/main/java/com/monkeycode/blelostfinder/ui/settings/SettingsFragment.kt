@@ -142,16 +142,10 @@ class SettingsFragment : Fragment() {
                     }
                 }
 
-                // 显示已保存的WiFi信息（只显示前几位+星号，保护隐私）
+                // 显示已保存的WiFi信息（只读显示）
                 launch {
                     viewModel.homeWifiSsid.collect { ssid ->
                         binding.tvHomeWifiSsidValue.text = maskString(ssid)
-                    }
-                }
-
-                launch {
-                    viewModel.homeWifiBssid.collect { bssid ->
-                        binding.tvHomeWifiBssidValue.text = maskString(bssid)
                     }
                 }
             }
@@ -213,17 +207,7 @@ class SettingsFragment : Fragment() {
                 title = "家庭 WiFi 名称 (SSID)",
                 currentValue = viewModel.homeWifiSsid.value,
                 onSave = { value ->
-                    viewModel.saveHomeWifi(value, viewModel.homeWifiBssid.value)
-                }
-            )
-        }
-
-        binding.layoutHomeWifiBssid.setOnClickListener {
-            showWifiInputDialog(
-                title = "家庭路由器 MAC 地址 (BSSID)",
-                currentValue = viewModel.homeWifiBssid.value,
-                onSave = { value ->
-                    viewModel.saveHomeWifi(viewModel.homeWifiSsid.value, value)
+                    viewModel.saveHomeWifi(value)
                 }
             )
         }

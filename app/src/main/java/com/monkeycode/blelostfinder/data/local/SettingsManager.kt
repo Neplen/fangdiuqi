@@ -35,7 +35,6 @@ class SettingsManager @Inject constructor(
         // 出门提醒功能配置
         val GO_OUT_REMINDER_ENABLED = booleanPreferencesKey("go_out_reminder_enabled")
         val HOME_WIFI_SSID = stringPreferencesKey("home_wifi_ssid")
-        val HOME_WIFI_BSSID = stringPreferencesKey("home_wifi_bssid")
         val GO_OUT_RINGTONE_PATH = stringPreferencesKey("go_out_ringtone_path")
     }
 
@@ -85,10 +84,6 @@ class SettingsManager @Inject constructor(
 
     val homeWifiSsid: Flow<String> = context.dataStore.data.map { preferences ->
         preferences[HOME_WIFI_SSID] ?: ""
-    }
-
-    val homeWifiBssid: Flow<String> = context.dataStore.data.map { preferences ->
-        preferences[HOME_WIFI_BSSID] ?: ""
     }
 
     val goOutRingtonePath: Flow<String?> = context.dataStore.data.map { preferences ->
@@ -156,10 +151,9 @@ class SettingsManager @Inject constructor(
         }
     }
 
-    suspend fun saveHomeWifi(ssid: String, bssid: String) {
+    suspend fun saveHomeWifi(ssid: String) {
         context.dataStore.edit { preferences ->
             preferences[HOME_WIFI_SSID] = ssid
-            preferences[HOME_WIFI_BSSID] = bssid
         }
     }
 

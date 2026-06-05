@@ -8,7 +8,6 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
-import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
@@ -38,7 +37,6 @@ class WifiMonitor @Inject constructor(
 
     // 保存当前连接的 WiFi 信息
     private var lastKnownSsid: String? = null
-    private var lastKnownBssid: String? = null
     private var lastKnownWifiConnected = false
 
     // WiFi 断开事件——使用 SharedFlow 确保每次都能触发
@@ -53,8 +51,7 @@ class WifiMonitor @Inject constructor(
     private var pollRunnable: Runnable? = null
 
     data class HomeWifiInfo(
-        val ssid: String,
-        val bssid: String
+        val ssid: String
     )
 
     /**
@@ -83,7 +80,7 @@ class WifiMonitor @Inject constructor(
             startPolling()
 
             isRegistered = true
-            Log.d(TAG, "WiFi monitor registered, current WiFi: ssid=$lastKnownSsid, bssid=$lastKnownBssid, connected=$lastKnownWifiConnected")
+            Log.d(TAG, "WiFi monitor registered, current WiFi: ssid=$lastKnownSsid, connected=$lastKnownWifiConnected")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to register WiFi monitor", e)
         }
@@ -121,7 +118,6 @@ class WifiMonitor @Inject constructor(
 
             isRegistered = false
             lastKnownSsid = null
-            lastKnownBssid = null
             lastKnownWifiConnected = false
             Log.d(TAG, "WiFi monitor unregistered")
         } catch (e: Exception) {
@@ -279,21 +275,20 @@ class WifiMonitor @Inject constructor(
                 try {
                     val previousState = lastKnownWifiConnected
                     val previousSsid = lastKnownSsid
-                    val previousBssid = lastKnownBssid
 
                     updateCurrentWifiInfo()
 
                     // 如果之前连接但现在断开，触发事件
                     if (previousState && !lastKnownWifiConnected) {
-                        if (previousSsid != null && previousBssid != null) {
-                            Log.d(TAG, "Poll detected WiFi disconnect: SSID=$previousSsid, BSSID=$previousBssid")
-                            _wifiDisconnectedEvent.tryEmit(HomeWifiInfo(previousSsid, previousBssid))
+                        if (previousSsid != null) {
+                            Log.d(TAG, "Poll detected WiFi disconnect: SSID=$previousSsid")
+                            _wifiDisconnectedEvent.tryEmit(HomeWifiInfo(previousSsid))
                         }
                     }
 
                     // 如果之前断开但现在连接，更新状态
                     if (!previousState && lastKnownWifiConnected) {
-                        Log.d(TAG, "Poll detected WiFi connect: SSID=$lastKnownSsid, BSSID=$lastKnownBssid")
+                        Log.d(TAG, "Poll detected WiFi connect: SSID=$lastKnownSsid")
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Poll error", e)
@@ -308,24 +303,22 @@ class WifiMonitor @Inject constructor(
 
     /**
      * 处理 WiFi 断开
-     * 修复：即使lastKnownWifiConnected为false，如果lastKnownSsid和lastKnownBssid不为null，也emit事件
+     * 修复：即使lastKnownWifiConnected为false，如果lastKnownSsid不为null，也emit事件
      */
     private fun handleWifiLost(source: String) {
         val disconnectedSsid = lastKnownSsid
-        val disconnectedBssid = lastKnownBssid
         val wasWifiConnected = lastKnownWifiConnected
 
         // 重置状态
         lastKnownWifiConnected = false
         lastKnownSsid = null
-        lastKnownBssid = null
 
-        // 修复：只要有SSID和BSSID，就emit事件，不强制要求wasWifiConnected
-        if (disconnectedSsid != null && disconnectedBssid != null) {
-            Log.d(TAG, "WiFi disconnected from $source: SSID=$disconnectedSsid, BSSID=$disconnectedBssid, wasConnected=$wasWifiConnected")
-            _wifiDisconnectedEvent.tryEmit(HomeWifiInfo(disconnectedSsid, disconnectedBssid))
+        // 修复：只要有SSID，就emit事件，不强制要求wasWifiConnected
+        if (disconnectedSsid != null) {
+            Log.d(TAG, "WiFi disconnected from $source: SSID=$disconnectedSsid, wasConnected=$wasWifiConnected")
+            _wifiDisconnectedEvent.tryEmit(HomeWifiInfo(disconnectedSsid))
         } else {
-            Log.d(TAG, "WiFi lost from $source but no valid info, ignoring")
+            Log.d(TAG, "WiFi lost from $source but no valid SSID, ignoring")
         }
     }
 
@@ -342,13 +335,11 @@ class WifiMonitor @Inject constructor(
             if (ssid != null && ssid != "<unknown ssid>" &&
                 bssid != null && bssid != "02:00:00:00:00:00") {
                 val newSsid = normalizeSsid(ssid)
-                val newBssid = normalizeBssid(bssid)
 
                 lastKnownSsid = newSsid
-                lastKnownBssid = newBssid
                 lastKnownWifiConnected = true
 
-                Log.d(TAG, "WiFi info updated: SSID=$newSsid, BSSID=$newBssid")
+                Log.d(TAG, "WiFi info updated: SSID=$newSsid, BSSID=$bssid")
             } else {
                 Log.d(TAG, "Not connected to valid WiFi: ssid=$ssid, bssid=$bssid")
                 // 如果之前连接但现在无效，可能是断开了
@@ -376,19 +367,11 @@ class WifiMonitor @Inject constructor(
     }
 
     /**
-     * 标准化 BSSID（转大写，去除分隔符差异）
+     * 检查是否是家庭 WiFi（仅匹配 SSID）
      */
-    private fun normalizeBssid(bssid: String): String {
-        return bssid.uppercase().replace(":", "")
-    }
-
-    /**
-     * 检查是否是家庭 WiFi（使用标准化后的值比较）
-     */
-    fun isHomeWifi(ssid: String?, bssid: String?, homeSsid: String, homeBssid: String): Boolean {
-        if (ssid == null || bssid == null) return false
-        return normalizeSsid(ssid) == normalizeSsid(homeSsid) &&
-               normalizeBssid(bssid) == normalizeBssid(homeBssid)
+    fun isHomeWifi(ssid: String?, homeSsid: String): Boolean {
+        if (ssid == null) return false
+        return normalizeSsid(ssid) == normalizeSsid(homeSsid)
     }
 
     /**

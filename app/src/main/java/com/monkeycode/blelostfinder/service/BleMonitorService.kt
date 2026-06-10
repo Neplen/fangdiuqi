@@ -504,8 +504,10 @@ class BleMonitorService : Service() {
                             return@collect
                         }
 
-                        // 检查断连报警条件是否也满足——如果满足，优先触发断连报警，不触发出门提醒
-                        val shouldTriggerDisconnectAlarm = shouldTriggerPhoneAlarm()
+                        // 检查断连报警条件是否也满足——只有蓝牙已断开且条件满足时，才优先触发断连报警
+                        val isBluetoothDisconnected = bleManager.connectionState.value is BleConnectionState.Disconnected
+                        val shouldTriggerDisconnectAlarm = isBluetoothDisconnected && shouldTriggerPhoneAlarm()
+                        Log.d(TAG, "出门提醒-断连优先级检查：蓝牙断开=$isBluetoothDisconnected, 断连报警条件=$shouldTriggerDisconnectAlarm")
                         if (shouldTriggerDisconnectAlarm) {
                             Log.d(TAG, "断连报警条件也满足，优先触发断连报警，跳过出门提醒")
                             return@collect
@@ -670,14 +672,21 @@ class BleMonitorService : Service() {
                     }
 
                     bluetoothDisconnectedTime = System.currentTimeMillis()
-                    lastShouldTriggerPhoneAlarm = shouldTriggerPhoneAlarm()
+                    val shouldTrigger = shouldTriggerPhoneAlarm()
+                    lastShouldTriggerPhoneAlarm = shouldTrigger
+                    Log.d(TAG, "断连报警判断：shouldTrigger=$shouldTrigger, isAlarmPlaying=$isAlarmPlaying, isDisconnectAlarmAcknowledged=$isDisconnectAlarmAcknowledged")
 
                     alarmMutex.withLock {
                         // 核心修复：增加"用户已确认"判断，已确认则不再触发断连自动报警
                         if (!isAlarmPlaying && shouldTriggerPhoneAlarm() && !isDisconnectAlarmAcknowledged) {
+                            Log.d(TAG, "触发断连自动报警")
                             triggerPhoneAlarmLocked("断连报警", ignoreDnd = false)
                         } else if (isDisconnectAlarmAcknowledged) {
                             Log.d(TAG, "用户已确认断连，跳过断连自动报警")
+                        } else if (isAlarmPlaying) {
+                            Log.d(TAG, "报警已在播放中，跳过断连自动报警")
+                        } else {
+                            Log.d(TAG, "断连自动报警条件不满足，跳过")
                         }
                     }
                 }
@@ -745,17 +754,34 @@ class BleMonitorService : Service() {
             return
         }
 
+        if (isAlarmPlaying) {
+            Log.d(TAG, "Alarm already playing, skip: $reason")
+            return
+        }
+
         isAlarmPlaying = true
         Log.d(TAG, "Triggering phone alarm: $reason")
 
         try {
             alarmSoundManager.stopPlaying()
             val ringtonePath = settingsManager.alarmRingtonePath.firstOrNull()
+            Log.d(TAG, "Playing alarm with ringtone: $ringtonePath")
             alarmSoundManager.playAlarm(ringtonePath)
             bleManager.emitAlarmEvent(reason)
+            Log.d(TAG, "Phone alarm triggered successfully: $reason")
         } catch (e: Exception) {
-            Log.e(TAG, "触发报警失败", e)
-            isAlarmPlaying = false
+            Log.e(TAG, "触发报警失败，尝试重试", e)
+            try {
+                // 第一次播放失败时重试一次（可能是音频初始化问题）
+                alarmSoundManager.stopPlaying()
+                val ringtonePath = settingsManager.alarmRingtonePath.firstOrNull()
+                alarmSoundManager.playAlarm(ringtonePath)
+                bleManager.emitAlarmEvent(reason)
+                Log.d(TAG, "Phone alarm retry succeeded: $reason")
+            } catch (e2: Exception) {
+                Log.e(TAG, "重试报警也失败", e2)
+                isAlarmPlaying = false
+            }
         }
     }
 

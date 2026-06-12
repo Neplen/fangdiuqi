@@ -28,15 +28,10 @@ class BleManager @Inject constructor(
     companion object {
         private const val TAG = "BleManager"
 
-        // 核心修复：与 i-Searching 保持一致，双击超时改为 1000ms
-        // 原 2000ms 过长，增加误触概率
         private const val DOUBLE_PRESS_TIMEOUT = 1000L
         private var lastButtonPressTime = -1L
         private var lastDoubleClickTime = 0L
         private const val DOUBLE_CLICK_COOLDOWN = 800L
-
-        // ===== 修改：删除硬编码的 I_DEVICE_NAME 和 I_DEVICE_MAC =====
-        // 设备信息改为从 DataStore/Room 动态读取，支持更换防丢器
 
         val ALERT_SERVICE_UUID = UUID.fromString("00001802-0000-1000-8000-00805f9b34fb")
         val ALERT_LEVEL_CHARACTERISTIC_UUID = UUID.fromString("00002a06-0000-1000-8000-00805f9b34fb")
@@ -74,6 +69,11 @@ class BleManager @Inject constructor(
 
     private var deviceMacToConnect: String? = null
 
+    // ===== 修复：重连互斥锁，防止多次并发重连 =====
+    private val reconnectLock = Object()
+    private var isReconnecting = false
+    private var reconnectJob: kotlinx.coroutines.Job? = null
+
     private val _connectionState = MutableStateFlow<BleConnectionState>(BleConnectionState.Disconnected)
     val connectionState: StateFlow<BleConnectionState> = _connectionState.asStateFlow()
 
@@ -86,12 +86,10 @@ class BleManager @Inject constructor(
     private val _bleEvents = MutableSharedFlow<BleEvent>(replay = 0, extraBufferCapacity = 1)
     val bleEvents: SharedFlow<BleEvent> = _bleEvents.asSharedFlow()
 
-    // ===== 修改：新增已连接设备名称 Flow，供主页动态显示 =====
     private val _connectedDeviceName = MutableStateFlow<String?>(null)
     val connectedDeviceName: StateFlow<String?> = _connectedDeviceName.asStateFlow()
 
     private val managerScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-
     private val mainHandler = Handler(Looper.getMainLooper())
 
     fun shouldEnableDeviceDisconnectAlarm(
@@ -171,7 +169,6 @@ class BleManager @Inject constructor(
                 BluetoothProfile.STATE_CONNECTED -> {
                     _connectionState.value = BleConnectionState.Connected
                     bluetoothGatt = gatt
-                    // ===== 修改：连接成功后从 BluetoothDevice 获取名称 =====
                     _connectedDeviceName.value = gatt.device.name ?: "未知设备"
                     gatt.discoverServices()
                     startRssiPolling()
@@ -196,8 +193,7 @@ class BleManager @Inject constructor(
                     writeQueue.clear()
                     isWriting = false
 
-                    // 核心修复：断开连接时重置双击检测状态，防止跨会话干扰
-                    // 避免重连后旧状态导致单击被误判为双击
+                    // 修复：断开连接时重置双击检测状态
                     lastButtonPressTime = -1L
                     lastDoubleClickTime = 0L
 
@@ -212,13 +208,25 @@ class BleManager @Inject constructor(
                         }
                     }
 
+                    // ===== 修复：互斥重连，防止并发 =====
                     deviceMacToConnect?.let { mac ->
+                        synchronized(reconnectLock) {
+                            if (isReconnecting) {
+                                Log.d(TAG, "已有重连任务在进行，跳过")
+                                return@let
+                            }
+                            isReconnecting = true
+                        }
                         mainHandler.postDelayed({
                             try {
                                 Log.d(TAG, "开始自动重连设备：$mac")
-                                scheduleReconnect(mac)
+                                safeReconnect(mac)
                             } catch (e: Exception) {
                                 Log.e(TAG, "自动重连失败", e)
+                            } finally {
+                                synchronized(reconnectLock) {
+                                    isReconnecting = false
+                                }
                             }
                         }, 3000)
                     }
@@ -302,7 +310,6 @@ class BleManager @Inject constructor(
         @Deprecated("Deprecated in API 33")
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             @Suppress("DEPRECATION")
-            // 核心修复：添加 null 安全检查，防止旧版 API 中 characteristic.value 为 null 导致崩溃
             val value = characteristic.value ?: return
             onCharacteristicValueChanged(characteristic, value)
         }
@@ -323,11 +330,6 @@ class BleManager @Inject constructor(
         private fun onCharacteristicValueChanged(characteristic: BluetoothGattCharacteristic, value: ByteArray) {
             Log.d(TAG, "Characteristic changed: ${characteristic.uuid}, value: ${value.contentToString()}")
             if (characteristic.uuid == CUSTOM_CHARACTERISTIC_UUID) {
-                // ==================== 核心修复：与 i-Searching 保持一致 ====================
-                // i-Searching 的 MyApplication.onCharacteristicChanged 中明确检查了：
-                // if (value.length <= 0 || value[0] != 1) { return; }
-                // 防丢器一次按键通常会发送两次通知：按下(value[0]==1)和释放(value[0]==0)
-                // 如果不过滤，释放通知会被误判为第二次点击，导致"单击触发报警"
                 if (value.isEmpty() || value[0] != 1.toByte()) {
                     Log.d(TAG, "忽略非按下通知: value=${value.contentToString()}")
                     return
@@ -340,8 +342,6 @@ class BleManager @Inject constructor(
                     return
                 }
 
-                // 核心修复：添加时间间隔下限(50ms)，防止BLE堆栈重复上报通知导致误判为双击
-                // i-Searching 的 MediaPlayerTools.OnFDQClick 中也有类似下限判断(>10ms)
                 if (lastButtonPressTime != -1L && currentTime - lastButtonPressTime < 50) {
                     Log.d(TAG, "通知间隔过短(${currentTime - lastButtonPressTime}ms)，忽略重复通知")
                     return
@@ -662,27 +662,37 @@ class BleManager @Inject constructor(
         return bluetoothAdapter?.isEnabled == true
     }
 
-    private fun scheduleReconnect(mac: String) {
+    // ===== 修复：安全重连，带互斥锁和超时 =====
+    @SuppressLint("MissingPermission")
+    private fun safeReconnect(mac: String) {
         val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE)
             as? BluetoothManager)?.adapter
 
         if (currentAdapter != null && currentAdapter.isEnabled) {
             try {
                 bluetoothAdapter = currentAdapter
+                cleanupGatt()
                 val device = currentAdapter.getRemoteDevice(mac)
                 device.connectGatt(context, false, bleCallback)
-                Log.d(TAG, "自动重连 GATT 已发起")
+                Log.d(TAG, "安全重连 GATT 已发起")
             } catch (e: Exception) {
-                Log.e(TAG, "自动重连失败", e)
+                Log.e(TAG, "安全重连失败", e)
             }
         } else {
             Log.e(TAG, "蓝牙未开启，等待开启后重连")
         }
     }
 
-    // ===== 修改：reconnectIfDisconnected 不再使用硬编码 MAC，改为从 DataStore 读取 =====
-    // 由 BleMonitorService 或 HomeViewModel 传入实际保存的 MAC
+    // ===== 修改：reconnectIfDisconnected 使用安全重连 =====
     fun reconnectIfDisconnected(macAddress: String? = deviceMacToConnect) {
+        synchronized(reconnectLock) {
+            if (isReconnecting) {
+                Log.d(TAG, "已有重连任务在进行，跳过")
+                return
+            }
+            isReconnecting = true
+        }
+
         val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
 
         if (macAddress != null && currentAdapter != null && currentAdapter.isEnabled) {
@@ -693,8 +703,15 @@ class BleManager @Inject constructor(
                 Log.d(TAG, "蓝牙重连已发起：$macAddress")
             } catch (e: Exception) {
                 Log.e(TAG, "蓝牙重连失败", e)
+            } finally {
+                synchronized(reconnectLock) {
+                    isReconnecting = false
+                }
             }
         } else {
+            synchronized(reconnectLock) {
+                isReconnecting = false
+            }
             if (macAddress == null) {
                 Log.d(TAG, "没有保存的设备地址，跳过重连（请进入扫描页绑定设备）")
             } else if (currentAdapter == null) {
@@ -705,7 +722,6 @@ class BleManager @Inject constructor(
         }
     }
 
-    // ===== 新增：设置当前要连接/重连的 MAC 地址（由扫描页或 Service 调用） =====
     fun setDeviceMacToConnect(mac: String?) {
         deviceMacToConnect = mac
         Log.d(TAG, "设置目标设备 MAC: $mac")

@@ -11,6 +11,9 @@ import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -23,7 +26,6 @@ class SettingsManager @Inject constructor(
     companion object {
         val DEVICE_NAME = stringPreferencesKey("device_name")
         val DEVICE_MAC = stringPreferencesKey("device_mac")
-        // 核心修复：删除 RSSI_THRESHOLD，新增断连报警开关
         val DISCONNECT_ALARM_ENABLED = booleanPreferencesKey("disconnect_alarm_enabled")
         val WIFI_DND_ENABLED = booleanPreferencesKey("wifi_dnd_enabled")
         val SCHEDULE_DND_ENABLED = booleanPreferencesKey("schedule_dnd_enabled")
@@ -32,14 +34,11 @@ class SettingsManager @Inject constructor(
         val ALARM_RINGTONE_PATH = stringPreferencesKey("alarm_ringtone_path")
         val AUTO_START_ENABLED = booleanPreferencesKey("auto_start_enabled")
         val MONITORING_ENABLED = booleanPreferencesKey("monitoring_enabled")
-        // 出门提醒功能配置
         val GO_OUT_REMINDER_ENABLED = booleanPreferencesKey("go_out_reminder_enabled")
         val HOME_WIFI_SSID = stringPreferencesKey("home_wifi_ssid")
         val GO_OUT_RINGTONE_PATH = stringPreferencesKey("go_out_ringtone_path")
     }
 
-    // ===== 修改：deviceName 和 deviceMac 默认值改为空字符串 =====
-    // 空字符串表示未绑定设备，首次安装后不会自动连接
     val deviceName: Flow<String> = context.dataStore.data.map { preferences ->
         preferences[DEVICE_NAME] ?: ""
     }
@@ -48,17 +47,16 @@ class SettingsManager @Inject constructor(
         preferences[DEVICE_MAC] ?: ""
     }
 
-    // 核心修复：断连自动报警开关，默认开启
     val isDisconnectAlarmEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
         preferences[DISCONNECT_ALARM_ENABLED] ?: true
     }
 
     val isWifiDndEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
-        preferences[WIFI_DND_ENABLED] ?: false  // 核心修复：默认关闭，避免首次安装就生效
+        preferences[WIFI_DND_ENABLED] ?: false
     }
 
     val isScheduleDndEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
-        preferences[SCHEDULE_DND_ENABLED] ?: false  // 核心修复：默认关闭
+        preferences[SCHEDULE_DND_ENABLED] ?: false
     }
 
     val dndStartTime: Flow<String> = context.dataStore.data.map { preferences ->
@@ -77,7 +75,6 @@ class SettingsManager @Inject constructor(
         preferences[MONITORING_ENABLED] ?: false
     }
 
-    // 出门提醒功能配置
     val isGoOutReminderEnabled: Flow<Boolean> = context.dataStore.data.map { preferences ->
         preferences[GO_OUT_REMINDER_ENABLED] ?: false
     }
@@ -102,7 +99,6 @@ class SettingsManager @Inject constructor(
         }
     }
 
-    // 核心修复：新增断连报警开关更新
     suspend fun updateDisconnectAlarmEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[DISCONNECT_ALARM_ENABLED] = enabled
@@ -128,10 +124,14 @@ class SettingsManager @Inject constructor(
         }
     }
 
+    /**
+     * 保存报警铃声路径，如果是本地文件则复制到APP私有目录防清理
+     */
     suspend fun updateAlarmRingtonePath(path: String?) {
+        val savedPath = copyRingtoneToPrivateDir(path, "alarm_ringtone")
         context.dataStore.edit { preferences ->
-            if (path != null) {
-                preferences[ALARM_RINGTONE_PATH] = path
+            if (savedPath != null) {
+                preferences[ALARM_RINGTONE_PATH] = savedPath
             } else {
                 preferences.remove(ALARM_RINGTONE_PATH)
             }
@@ -144,7 +144,6 @@ class SettingsManager @Inject constructor(
         }
     }
 
-    // 出门提醒功能配置
     suspend fun updateGoOutReminderEnabled(enabled: Boolean) {
         context.dataStore.edit { preferences ->
             preferences[GO_OUT_REMINDER_ENABLED] = enabled
@@ -157,13 +156,66 @@ class SettingsManager @Inject constructor(
         }
     }
 
+    /**
+     * 保存出门提醒铃声路径，如果是本地文件则复制到APP私有目录防清理
+     */
     suspend fun updateGoOutRingtonePath(path: String?) {
+        val savedPath = copyRingtoneToPrivateDir(path, "go_out_ringtone")
         context.dataStore.edit { preferences ->
-            if (path != null) {
-                preferences[GO_OUT_RINGTONE_PATH] = path
+            if (savedPath != null) {
+                preferences[GO_OUT_RINGTONE_PATH] = savedPath
             } else {
                 preferences.remove(GO_OUT_RINGTONE_PATH)
             }
         }
+    }
+
+    /**
+     * 将铃声文件复制到APP私有目录，防止被清理软件删除
+     * 系统铃声URI（content://media/...）直接保留，不会被清理
+     * 只有本地文件路径（/storage/...）才需要复制
+     */
+    private fun copyRingtoneToPrivateDir(path: String?, fileName: String): String? {
+        if (path == null) return null
+
+        // 系统URI直接保留，不会被清理
+        if (path.startsWith("content://") || path.startsWith("android.resource://")) {
+            return path
+        }
+
+        // 已经是私有目录的，不重复复制
+        if (path.contains(context.filesDir.absolutePath)) {
+            return path
+        }
+
+        return try {
+            val srcFile = File(path)
+            if (!srcFile.exists()) {
+                Log.w(TAG, "铃声源文件不存在: $path")
+                return path // 回退到原路径，让调用方处理失败
+            }
+
+            val ringtoneDir = File(context.filesDir, "ringtones")
+            if (!ringtoneDir.exists()) {
+                ringtoneDir.mkdirs()
+            }
+
+            val destFile = File(ringtoneDir, "$fileName.${srcFile.extension}")
+            FileInputStream(srcFile).use { input ->
+                FileOutputStream(destFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+
+            Log.d(TAG, "铃声已复制到私有目录: ${destFile.absolutePath}")
+            destFile.absolutePath
+        } catch (e: Exception) {
+            Log.e(TAG, "复制铃声到私有目录失败", e)
+            path // 回退到原路径
+        }
+    }
+
+    companion object {
+        private const val TAG = "SettingsManager"
     }
 }

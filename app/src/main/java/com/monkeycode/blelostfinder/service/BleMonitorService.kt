@@ -751,7 +751,10 @@ class BleMonitorService : Service() {
             }
 
             alarmSoundManager.playAlarm(ringtonePath)
-            bleManager.emitAlarmEvent(reason)
+            // 只有断连报警才触发 BLE 事件，出门提醒不触发（避免重复弹窗）
+            if (!isGoOutReminder) {
+                bleManager.emitAlarmEvent(reason)
+            }
 
             // 发送广播显示弹窗，带上 alarmType
             val intent = Intent("com.monkeycode.blelostfinder.SHOW_PHONE_ALARM")

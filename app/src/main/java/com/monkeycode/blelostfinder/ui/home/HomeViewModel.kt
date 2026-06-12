@@ -50,9 +50,7 @@ class HomeViewModel @Inject constructor(
     private val _phoneAlarmTriggered = MutableStateFlow(false)
     val phoneAlarmTriggered: StateFlow<Boolean> = _phoneAlarmTriggered.asStateFlow()
 
-    // 新增：出门提醒弹窗触发状态（独立于断连报警）
-    private val _goOutReminderTriggered = MutableStateFlow(false)
-    val goOutReminderTriggered: StateFlow<Boolean> = _goOutReminderTriggered.asStateFlow()
+    // 出门提醒已合并到报警系统，使用统一的弹窗状态
 
     private val _isDeviceBound = MutableStateFlow(false)
     val isDeviceBound: StateFlow<Boolean> = _isDeviceBound.asStateFlow()
@@ -222,37 +220,17 @@ class HomeViewModel @Inject constructor(
     }
 
     /**
-     * 停止出门提醒（独立方法，不影响断连报警状态）
+     * 停止出门提醒（已合并到报警系统，直接调用 stopPhoneAlarm）
      */
     fun stopGoOutReminder() {
-        try {
-            alarmSoundManager.stopPlaying()
-            _goOutReminderTriggered.value = false
-
-            val context = getApplication<Application>().applicationContext
-            val stopIntent = Intent(context, BleMonitorService::class.java).apply {
-                action = BleMonitorService.ACTION_STOP_GO_OUT_REMINDER
-            }
-            try {
-                context.startService(stopIntent)
-                Log.d("HomeViewModel", "已通知 Service 停止出门提醒")
-            } catch (e: Exception) {
-                Log.e("HomeViewModel", "通知 Service 停止出门提醒失败", e)
-            }
-
-            Log.d("HomeViewModel", "停止出门提醒")
-        } catch (e: Exception) {
-            Log.e("HomeViewModel", "停止出门提醒失败", e)
-        }
+        stopPhoneAlarm()
     }
 
     fun clearPhoneAlertDialog() {
         _phoneAlarmTriggered.value = false
     }
 
-    fun clearGoOutReminderDialog() {
-        _goOutReminderTriggered.value = false
-    }
+    // 出门提醒已合并，无需独立清除方法
 
     fun startMonitoring() {
         try {

@@ -1,16 +1,17 @@
 package com.monkeycode.blelostfinder.data.local
 
 import android.content.Context
+import android.util.Log
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import android.util.Log
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -24,6 +25,8 @@ class SettingsManager @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
     companion object {
+        private const val TAG = "SettingsManager"
+
         val DEVICE_NAME = stringPreferencesKey("device_name")
         val DEVICE_MAC = stringPreferencesKey("device_mac")
         val DISCONNECT_ALARM_ENABLED = booleanPreferencesKey("disconnect_alarm_enabled")
@@ -37,6 +40,8 @@ class SettingsManager @Inject constructor(
         val GO_OUT_REMINDER_ENABLED = booleanPreferencesKey("go_out_reminder_enabled")
         val HOME_WIFI_SSID = stringPreferencesKey("home_wifi_ssid")
         val GO_OUT_RINGTONE_PATH = stringPreferencesKey("go_out_ringtone_path")
+        
+        private const val TAG = "SettingsManager"
     }
 
     val deviceName: Flow<String> = context.dataStore.data.map { preferences ->
@@ -124,9 +129,6 @@ class SettingsManager @Inject constructor(
         }
     }
 
-    /**
-     * 保存报警铃声路径，如果是本地文件则复制到APP私有目录防清理
-     */
     suspend fun updateAlarmRingtonePath(path: String?) {
         val savedPath = copyRingtoneToPrivateDir(path, "alarm_ringtone")
         context.dataStore.edit { preferences ->
@@ -156,9 +158,6 @@ class SettingsManager @Inject constructor(
         }
     }
 
-    /**
-     * 保存出门提醒铃声路径，如果是本地文件则复制到APP私有目录防清理
-     */
     suspend fun updateGoOutRingtonePath(path: String?) {
         val savedPath = copyRingtoneToPrivateDir(path, "go_out_ringtone")
         context.dataStore.edit { preferences ->
@@ -192,7 +191,7 @@ class SettingsManager @Inject constructor(
             val srcFile = File(path)
             if (!srcFile.exists()) {
                 Log.w(TAG, "铃声源文件不存在: $path")
-                return path // 回退到原路径，让调用方处理失败
+                return path
             }
 
             val ringtoneDir = File(context.filesDir, "ringtones")
@@ -200,7 +199,12 @@ class SettingsManager @Inject constructor(
                 ringtoneDir.mkdirs()
             }
 
-            val destFile = File(ringtoneDir, "$fileName.${srcFile.extension}")
+            val ext = if (srcFile.name.contains(".")) {
+                srcFile.name.substring(srcFile.name.lastIndexOf(".") + 1)
+            } else {
+                "mp3"
+            }
+            val destFile = File(ringtoneDir, "$fileName.$ext")
             FileInputStream(srcFile).use { input ->
                 FileOutputStream(destFile).use { output ->
                     input.copyTo(output)
@@ -211,11 +215,7 @@ class SettingsManager @Inject constructor(
             destFile.absolutePath
         } catch (e: Exception) {
             Log.e(TAG, "复制铃声到私有目录失败", e)
-            path // 回退到原路径
+            path
         }
-    }
-
-    companion object {
-        private const val TAG = "SettingsManager"
     }
 }

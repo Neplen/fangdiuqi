@@ -28,6 +28,7 @@ import com.monkeycode.blelostfinder.util.PermissionHelper
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
 import java.util.*
+import javax.inject.Inject
 
 @AndroidEntryPoint
 class SettingsFragment : Fragment() {
@@ -36,6 +37,9 @@ class SettingsFragment : Fragment() {
     private val binding get() = _binding!!
 
     private val viewModel: SettingsViewModel by viewModels()
+
+    @Inject
+    lateinit var alarmSoundManager: AlarmSoundManager
 
     private var currentMediaPlayer: MediaPlayer? = null
     private var goOutReminderMediaPlayer: MediaPlayer? = null
@@ -148,16 +152,10 @@ class SettingsFragment : Fragment() {
                     }
                 }
 
-                // 显示已保存的WiFi信息（只显示前几位+星号，保护隐私）
+                // 显示已保存的WiFi信息（只读显示）
                 launch {
                     viewModel.homeWifiSsid.collect { ssid ->
                         binding.tvHomeWifiSsidValue.text = maskString(ssid)
-                    }
-                }
-
-                launch {
-                    viewModel.homeWifiBssid.collect { bssid ->
-                        binding.tvHomeWifiBssidValue.text = maskString(bssid)
                     }
                 }
             }
@@ -219,24 +217,14 @@ class SettingsFragment : Fragment() {
                 title = "家庭 WiFi 名称 (SSID)",
                 currentValue = viewModel.homeWifiSsid.value,
                 onSave = { value ->
-                    viewModel.saveHomeWifi(value, viewModel.homeWifiBssid.value)
-                }
-            )
-        }
-
-        binding.layoutHomeWifiBssid.setOnClickListener {
-            showWifiInputDialog(
-                title = "家庭路由器 MAC 地址 (BSSID)",
-                currentValue = viewModel.homeWifiBssid.value,
-                onSave = { value ->
-                    viewModel.saveHomeWifi(viewModel.homeWifiSsid.value, value)
+                    viewModel.saveHomeWifi(value)
                 }
             )
         }
     }
 
     /**
-     * 显示WiFi信息输入对话框（使用MaterialAlertDialogBuilder，显示按钮通过自定义View实现）
+     * 显示WiFi信息输入对话框
      */
     private fun showWifiInputDialog(title: String, currentValue: String, onSave: (String) -> Unit) {
         val context = requireContext()
@@ -275,13 +263,16 @@ class SettingsFragment : Fragment() {
                 topMargin = (8 * context.resources.displayMetrics.density).toInt()
             }
             setOnClickListener {
-                val isPassword = (input.inputType and android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD) != 0
-                if (isPassword) {
-                    input.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
-                    text = "隐藏内容"
-                } else {
+                // 修复：使用精确比较判断当前状态
+                val isCurrentlyVisible = input.inputType == (android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD)
+                if (isCurrentlyVisible) {
+                    // 当前可见，切换为隐藏（密码模式）
                     input.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
                     text = "显示内容"
+                } else {
+                    // 当前隐藏，切换为可见
+                    input.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                    text = "隐藏内容"
                 }
                 // 光标移到最后
                 input.setSelection(input.text?.length ?: 0)

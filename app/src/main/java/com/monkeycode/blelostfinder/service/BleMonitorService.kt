@@ -491,10 +491,10 @@ class BleMonitorService : Service() {
                             return@collect
                         }
 
-                        // 合并：出门提醒直接走报警通道
+                        // 合并：出门提醒直接走报警通道，用 ALARM_TYPE_GO_OUT 区分
                         Log.d(TAG, "检测到断开家庭 WiFi，触发出门提醒（合并到报警通道）")
                         alarmMutex.withLock {
-                            triggerPhoneAlarmLocked(reason = "出门提醒", ignoreDnd = false, isGoOutReminder = true)
+                            triggerPhoneAlarmLocked(ALARM_TYPE_GO_OUT, "出门提醒", ignoreDnd = false)
                         }
                     }
                 } catch (e: Exception) {
@@ -751,10 +751,7 @@ class BleMonitorService : Service() {
             }
 
             alarmSoundManager.playAlarm(ringtonePath)
-            // 只有断连报警才触发 BLE 事件，出门提醒不触发（避免重复弹窗）
-            if (alarmType != ALARM_TYPE_GO_OUT) {
-                bleManager.emitAlarmEvent(reason)
-            }
+            bleManager.emitAlarmEvent(reason)
 
             // 发送广播显示弹窗，带上 alarmType
             val intent = Intent("com.monkeycode.blelostfinder.SHOW_PHONE_ALARM")

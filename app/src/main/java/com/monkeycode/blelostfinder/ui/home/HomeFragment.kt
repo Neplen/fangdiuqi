@@ -153,7 +153,13 @@ class HomeFragment : Fragment() {
                     }
                 }
 
-                // phoneAlarmTriggered observer 已删除，统一通过广播处理弹窗
+                launch {
+                    viewModel.phoneAlarmTriggered.collect { triggered ->
+                        if (triggered) {
+                            showPhoneAlarmDialog()
+                        }
+                    }
+                }
 
                 // 出门提醒已合并到报警系统，通过广播统一处理
 
@@ -319,7 +325,10 @@ class HomeFragment : Fragment() {
         Log.d("HomeFragment", "弹窗已显示: ${if (isGoOutReminder) "出门提醒(蓝)" else "断连报警(红)"}")
     }
 
-    // 所有弹窗统一通过 showAlarmDialog 处理
+    // 兼容旧调用
+    private fun showPhoneAlarmDialog() {
+        showAlarmDialog(isGoOutReminder = false)
+    }
 
 
 

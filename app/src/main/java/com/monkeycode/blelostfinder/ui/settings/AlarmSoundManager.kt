@@ -331,16 +331,13 @@ class AlarmSoundManager @Inject constructor(
 
 
     /**
-     * 将用户选择的本地铃声文件复制到应用外部私有目录，确保重启后仍然可用
-     * 路径：Android/data/com.monkeycode.blelostfinder/files/ringtones/
+     * 将用户选择的本地铃声文件复制到应用私有目录，确保重启后仍然可用
      */
     fun copyRingtoneToPrivateDir(sourceUri: android.net.Uri): String? {
         return try {
-            // 使用外部私有目录，用户可以在文件管理器中查看
-            val privateDir = File(contextApp.getExternalFilesDir(null), "ringtones")
+            val privateDir = File(contextApp.filesDir, "ringtones")
             if (!privateDir.exists()) {
-                val created = privateDir.mkdirs()
-                Log.d(TAG, "创建铃声目录: ${privateDir.absolutePath}, 成功: $created")
+                privateDir.mkdirs()
             }
 
             // 从URI获取文件名
@@ -363,10 +360,10 @@ class AlarmSoundManager @Inject constructor(
                 }
             }
 
-            Log.d(TAG, "铃声已复制到: ${destFile.absolutePath}, 大小: ${destFile.length()} bytes")
+            Log.d(TAG, "铃声已复制到私有目录: ${destFile.absolutePath}")
             destFile.absolutePath
         } catch (e: Exception) {
-            Log.e(TAG, "复制铃声失败", e)
+            Log.e(TAG, "复制铃声到私有目录失败", e)
             null
         }
     }

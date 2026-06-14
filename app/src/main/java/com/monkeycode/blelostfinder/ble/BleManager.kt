@@ -518,8 +518,15 @@ class BleManager @Inject constructor(
             }
 
             try {
-                bluetoothDevice?.connectGatt(context, false, bleCallback)
-                Log.d(TAG, "GATT 直接连接已发起")
+                // 核心修复：延迟100ms确保旧GATT资源已释放，避免系统BLE栈冲突
+                mainHandler.postDelayed({
+                    try {
+                        bluetoothDevice?.connectGatt(context, false, bleCallback)
+                        Log.d(TAG, "GATT 直接连接已发起（延迟100ms）")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "直接连接 GATT 失败", e)
+                    }
+                }, 100)
             } catch (e: Exception) {
                 Log.e(TAG, "直接连接 GATT 失败", e)
             }
@@ -669,6 +676,11 @@ class BleManager @Inject constructor(
         if (currentAdapter != null && currentAdapter.isEnabled) {
             try {
                 bluetoothAdapter = currentAdapter
+                // 核心修复：如果已有连接，不重复发起
+                if (bluetoothGatt != null) {
+                    Log.d(TAG, "已有GATT连接，跳过重复重连")
+                    return
+                }
                 val device = currentAdapter.getRemoteDevice(mac)
                 device.connectGatt(context, false, bleCallback)
                 Log.d(TAG, "自动重连 GATT 已发起")
@@ -688,9 +700,16 @@ class BleManager @Inject constructor(
         if (macAddress != null && currentAdapter != null && currentAdapter.isEnabled) {
             try {
                 bluetoothAdapter = currentAdapter
-                cleanupGatt()
-                connectDirectly(macAddress)
-                Log.d(TAG, "蓝牙重连已发起：$macAddress")
+                // 核心修复：如果已有连接，先断开再重连，避免GATT冲突
+                if (bluetoothGatt != null) {
+                    Log.d(TAG, "已有GATT连接，先清理再重连")
+                    cleanupGatt()
+                }
+                // 核心修复：延迟200ms确保资源释放后再连接
+                mainHandler.postDelayed({
+                    connectDirectly(macAddress)
+                    Log.d(TAG, "蓝牙重连已发起：$macAddress（延迟200ms）")
+                }, 200)
             } catch (e: Exception) {
                 Log.e(TAG, "蓝牙重连失败", e)
             }
@@ -715,33 +734,34 @@ class BleManager @Inject constructor(
         bluetoothGatt?.let { oldGatt ->
             try {
                 Log.d(TAG, "清理旧 GATT 资源")
-                try { oldGatt.disconnect() } catch (e: Exception) {}
-                try { oldGatt.close() } catch (e: Exception) {}
+                try { 
+                    oldGatt.disconnect() 
+                    Log.d(TAG, "GATT disconnect 已调用")
+                } catch (e: Exception) {
+                    Log.e(TAG, "disconnect 异常", e)
+                }
+                // 核心修复：增加延迟确保disconnect完成后再close，避免系统BLE栈冲突
                 try {
-                    val mBluetoothGattField = oldGatt.javaClass.getDeclaredField("mBluetoothGatt")
-                    mBluetoothGattField.isAccessible = true
-                    val mBluetoothGatt = mBluetoothGattField.get(oldGatt)
-                    if (mBluetoothGatt != null) {
-                        val closeMethod = mBluetoothGatt.javaClass.getMethod("close")
-                        closeMethod.invoke(mBluetoothGatt)
-                    }
-                } catch (e: Exception) {}
-                try {
-                    val callbackField = oldGatt.javaClass.getDeclaredField("mCallback")
-                    callbackField.isAccessible = true
-                    callbackField.set(oldGatt, null)
-                } catch (e: Exception) {}
+                    Thread.sleep(100)
+                    oldGatt.close()
+                    Log.d(TAG, "GATT close 已调用（延迟100ms）")
+                } catch (e: Exception) {
+                    Log.e(TAG, "close 异常", e)
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "清理 GATT 异常", e)
+            } finally {
+                // 核心修复：确保资源释放，即使disconnect/close失败
+                bluetoothGatt = null
+                alertCharacteristic = null
+                batteryCharacteristic = null
+                customCharacteristic = null
+                disconnectAlarmCharacteristic = null
+                pendingDisconnectAlarmState = null
+                writeQueue.clear()
+                isWriting = false
+                Log.d(TAG, "GATT 资源已清理")
             }
-            bluetoothGatt = null
-            alertCharacteristic = null
-            batteryCharacteristic = null
-            customCharacteristic = null
-            disconnectAlarmCharacteristic = null
-            pendingDisconnectAlarmState = null
-            writeQueue.clear()
-            isWriting = false
         }
     }
 

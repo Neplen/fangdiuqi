@@ -466,6 +466,12 @@ class BleMonitorService : Service() {
                     Log.d(TAG, "开始监听WiFi断开事件...")
                     wifiMonitor.wifiDisconnectedEvent.collect { wifiInfo ->
                         Log.d(TAG, "收到WiFi断开事件：SSID=${wifiInfo.ssid}")
+
+                        // 核心修复：WiFi已断开，立即更新状态缓存，避免WiFi勿扰错误阻止出门提醒
+                        cachedIsWifiConnected = false
+                        isWifiDndActive = cachedWifiDndEnabled && false
+                        Log.d(TAG, "WiFi断开，已同步更新状态缓存：isWifiDndActive=$isWifiDndActive")
+
                         Log.d(TAG, "当前状态：出门提醒开关=$cachedGoOutReminderEnabled, 定时勿扰=$isScheduleDndEnabled, 在时段内=${isInDndTimeRange()}, 家庭SSID=$cachedHomeWifiSsid")
 
                         if (!cachedGoOutReminderEnabled) {
@@ -473,7 +479,7 @@ class BleMonitorService : Service() {
                             return@collect
                         }
 
-                        // 新增：定时勿扰时段内，不触发出门提醒（避免路由器凌晨重启惊醒用户）
+                        // 定时勿扰时段内，不触发出门提醒（避免路由器凌晨重启惊醒用户）
                         if (isScheduleDndEnabled && isInDndTimeRange()) {
                             Log.d(TAG, "定时勿扰生效中，跳过出门提醒")
                             return@collect
@@ -641,10 +647,21 @@ class BleMonitorService : Service() {
                         ))
                     }
 
-                    // 修复：断连时强制刷新WiFi状态，确保shouldTriggerPhoneAlarm判断准确
+                    // 核心修复：断连时强制刷新WiFi状态，确保shouldTriggerPhoneAlarm判断准确
                     val currentWifiConnected = isWifiConnected()
                     cachedIsWifiConnected = currentWifiConnected
-                    Log.d(TAG, "断连时强制刷新WiFi状态: connected=$currentWifiConnected")
+                    // 核心修复：如果WiFi已断开，同步更新WiFi勿扰状态，避免影响断连报警判断
+                    if (!currentWifiConnected) {
+                        isWifiDndActive = false
+                    }
+                    Log.d(TAG, "断连时强制刷新WiFi状态: connected=$currentWifiConnected, isWifiDndActive=$isWifiDndActive")
+
+                    // 核心修复：如果这是新的断连会话（距离上次超过30秒），重置确认标志
+                    val lastDisconnectTime = bluetoothDisconnectedTime
+                    if (lastDisconnectTime != null && System.currentTimeMillis() - lastDisconnectTime > 30000) {
+                        isDisconnectAlarmAcknowledged = false
+                        Log.d(TAG, "新的断连会话（距上次${(System.currentTimeMillis() - lastDisconnectTime)/1000}秒），重置确认标志")
+                    }
 
                     bluetoothDisconnectedTime = System.currentTimeMillis()
                     lastShouldTriggerPhoneAlarm = shouldTriggerPhoneAlarm()
@@ -655,6 +672,10 @@ class BleMonitorService : Service() {
                             triggerPhoneAlarmLocked(ALARM_TYPE_DISCONNECT, "断连报警", ignoreDnd = false)
                         } else if (isDisconnectAlarmAcknowledged) {
                             Log.d(TAG, "用户已确认断连，跳过断连自动报警")
+                        } else if (isAlarmPlaying) {
+                            Log.d(TAG, "手机报警已在播放中，跳过重复触发")
+                        } else {
+                            Log.d(TAG, "断连报警条件不满足，不触发")
                         }
                     }
 
@@ -683,6 +704,14 @@ class BleMonitorService : Service() {
     }
 
     private fun shouldTriggerPhoneAlarm(): Boolean {
+        // 核心修复：使用实时WiFi状态作为备用，避免缓存延迟导致误判
+        val realTimeWifiConnected = isWifiConnected()
+        if (realTimeWifiConnected != cachedIsWifiConnected) {
+            Log.d(TAG, "WiFi状态缓存不一致，使用实时状态: $realTimeWifiConnected (缓存: $cachedIsWifiConnected)")
+            cachedIsWifiConnected = realTimeWifiConnected
+            isWifiDndActive = cachedWifiDndEnabled && realTimeWifiConnected
+        }
+
         if (cachedWifiDndEnabled && cachedIsWifiConnected) {
             Log.d(TAG, "手机报警判断：WiFi勿扰生效，不报警")
             return false
@@ -816,12 +845,15 @@ class BleMonitorService : Service() {
 
     private fun isWifiConnected(): Boolean {
         return try {
-            val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE)
-                as? android.net.ConnectivityManager
-            val network = connectivityManager?.activeNetwork
-            val capabilities = connectivityManager?.getNetworkCapabilities(network)
-            val isWifi = capabilities?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true
-            Log.d(TAG, "WiFi 连接状态: $isWifi")
+            // 核心修复：使用WifiManager检查WiFi状态，比ConnectivityManager更可靠
+            // 避免activeNetwork是移动数据时误判为WiFi未连接
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            val wifiInfo = wifiManager?.connectionInfo
+            val isWifi = wifiManager?.isWifiEnabled == true && 
+                        wifiInfo != null && 
+                        wifiInfo.bssid != null && 
+                        wifiInfo.bssid != "02:00:00:00:00:00"
+            Log.d(TAG, "WiFi 连接状态(WifiManager): $isWifi, SSID=${wifiInfo?.ssid}")
             isWifi
         } catch (e: Exception) {
             Log.e(TAG, "检查 WiFi 状态失败", e)

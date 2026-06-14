@@ -334,8 +334,10 @@ class HomeFragment : Fragment() {
     private fun dismissAlarmDialog() {
         alarmDialog?.dismiss()
         alarmDialog = null
-        // ==================== 修复：清空报警类型，避免状态残留影响下次弹窗 ====================
+        // 核心修复：清空报警类型，避免状态残留影响下次弹窗
         currentAlarmType = null
+        // 核心修复：确保ViewModel中的弹窗状态被清除，避免重复触发
+        viewModel.clearPhoneAlertDialog()
     }
 
     private fun updateConnectionState(state: BleConnectionState) {

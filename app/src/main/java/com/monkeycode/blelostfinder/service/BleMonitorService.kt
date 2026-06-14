@@ -152,9 +152,13 @@ class BleMonitorService : Service() {
                                 Log.d(TAG, "收到外部停止命令，已重置报警状态，类型=$alarmType")
                             }
                         }
-                        // 核心修复：用户点击"好的"确认，标记已知晓断连
-                        isDisconnectAlarmAcknowledged = true
-                        Log.d(TAG, "用户已确认报警，当前断连期间不再重复触发")
+                        // 核心修复：只有断连报警才设置确认标志，出门提醒不影响
+                        if (alarmType == ALARM_TYPE_DISCONNECT) {
+                            isDisconnectAlarmAcknowledged = true
+                            Log.d(TAG, "用户已确认断连报警，当前断连期间不再重复触发")
+                        } else {
+                            Log.d(TAG, "用户已确认出门提醒，不影响断连报警确认标志")
+                        }
                     }
                 }
             }
@@ -313,9 +317,14 @@ class BleMonitorService : Service() {
             Log.d(TAG, "用户已确认断连，跳过补偿报警")
             return
         }
+        // 核心修复：如果当前正在播放出门提醒，不触发断连补偿报警
+        if (currentAlarmType == ALARM_TYPE_GO_OUT) {
+            Log.d(TAG, "出门提醒播放中，跳过断连补偿报警")
+            return
+        }
 
         val currentShouldTrigger = shouldTriggerPhoneAlarm()
-        Log.d(TAG, "补偿报警检查: 之前=$lastShouldTriggerPhoneAlarm, 现在=$currentShouldTrigger, 蓝牙断连时间=$bluetoothDisconnectedTime, 已确认=$isDisconnectAlarmAcknowledged")
+        Log.d(TAG, "补偿报警检查: 之前=$lastShouldTriggerPhoneAlarm, 现在=$currentShouldTrigger, 蓝牙断连时间=$bluetoothDisconnectedTime, 已确认=$isDisconnectAlarmAcknowledged, currentAlarmType=$currentAlarmType")
 
         if (!lastShouldTriggerPhoneAlarm && currentShouldTrigger && bluetoothDisconnectedTime != null) {
             serviceScope.launch {
@@ -667,8 +676,10 @@ class BleMonitorService : Service() {
                     lastShouldTriggerPhoneAlarm = shouldTriggerPhoneAlarm()
 
                     alarmMutex.withLock {
-                        // 核心修复：增加"用户已确认"判断，已确认则不再触发断连自动报警
-                        if (!isAlarmPlaying && shouldTriggerPhoneAlarm() && !isDisconnectAlarmAcknowledged) {
+                        // 核心修复：如果正在播放出门提醒，不叠加断连报警（避免同时响两种铃声）
+                        if (isAlarmPlaying && currentAlarmType == ALARM_TYPE_GO_OUT) {
+                            Log.d(TAG, "出门提醒播放中，跳过断连自动报警（避免叠加）")
+                        } else if (!isAlarmPlaying && shouldTriggerPhoneAlarm() && !isDisconnectAlarmAcknowledged) {
                             triggerPhoneAlarmLocked(ALARM_TYPE_DISCONNECT, "断连报警", ignoreDnd = false)
                         } else if (isDisconnectAlarmAcknowledged) {
                             Log.d(TAG, "用户已确认断连，跳过断连自动报警")
@@ -760,8 +771,15 @@ class BleMonitorService : Service() {
 
     // 合并：统一报警触发方法，通过 alarmType 区分断连报警和出门提醒
     private suspend fun triggerPhoneAlarmLocked(alarmType: String, reason: String, ignoreDnd: Boolean = false) {
-        if (!ignoreDnd && isInDndMode()) {
+        // 核心修复：出门提醒不受DND影响（WiFi已断开，DND不应阻止出门提醒）
+        if (!ignoreDnd && alarmType != ALARM_TYPE_GO_OUT && isInDndMode()) {
             Log.d(TAG, "In DND mode, not triggering alarm: $reason")
+            return
+        }
+
+        // 核心修复：如果当前正在播放同类型报警，不重复触发
+        if (isAlarmPlaying && currentAlarmType == alarmType) {
+            Log.d(TAG, "同类型报警已在播放中，跳过重复触发: type=$alarmType")
             return
         }
 
@@ -812,8 +830,9 @@ class BleMonitorService : Service() {
     }
 
     private fun isInDndMode(): Boolean {
-        if (isWifiDndActive) {
-            Log.d(TAG, "WiFi DND is active")
+        // 核心修复：WiFi勿扰只在WiFi连接时生效（WiFi已断开时，DND不应阻止报警）
+        if (isWifiDndActive && cachedIsWifiConnected) {
+            Log.d(TAG, "WiFi DND is active and WiFi is connected")
             return true
         }
 

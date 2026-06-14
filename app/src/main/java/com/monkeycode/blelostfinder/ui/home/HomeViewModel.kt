@@ -60,11 +60,9 @@ class HomeViewModel @Inject constructor(
         observeBleState()
         observeBleEvents()
 
-        // 启动时如果正在响铃，显示弹窗
-        if (alarmSoundManager.isPlaying()) {
-            _phoneAlarmTriggered.value = true
-            Log.d("HomeViewModel", "启动时检测到正在响铃，显示弹窗")
-        }
+        // 核心修复：移除启动时检查alarmSoundManager.isPlaying()，避免MediaPlayer残留导致误触发
+        // 弹窗状态由Service广播或BLE事件驱动，不依赖MediaPlayer状态
+        Log.d("HomeViewModel", "初始化完成，等待Service广播或BLE事件触发弹窗")
     }
 
     private fun checkDeviceBound() {
@@ -200,6 +198,7 @@ class HomeViewModel @Inject constructor(
                 _isDeviceAlarmPlaying.value = false
             }
             alarmSoundManager.stopPlaying()
+            // 核心修复：确保弹窗状态被清除，避免重复触发
             _phoneAlarmTriggered.value = false
 
             val context = getApplication<Application>().applicationContext

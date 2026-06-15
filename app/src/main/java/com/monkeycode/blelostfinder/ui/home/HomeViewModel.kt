@@ -74,7 +74,13 @@ class HomeViewModel @Inject constructor(
 
             if (hasDevice) {
                 loadDevice(savedMac!!)
-                connectToDevice()
+                // 核心修复：如果监控服务已在运行，说明蓝牙已连接或正在连接，不重复发起
+                // 避免 connectDirectly() 的 cleanupGatt() 触发断连报警
+                if (!BleMonitorService.isRunning.value) {
+                    connectToDevice()
+                } else {
+                    Log.d("HomeViewModel", "监控服务已在运行，跳过自动连接，避免重复断连")
+                }
             } else {
                 Log.d("HomeViewModel", "未绑定设备，等待用户扫描绑定")
             }
@@ -86,6 +92,11 @@ class HomeViewModel @Inject constructor(
             try {
                 val savedMac = settingsManager.deviceMac.firstOrNull()
                 if (!savedMac.isNullOrEmpty()) {
+                    // 核心修复：如果蓝牙已连接，不重复发起连接，避免 cleanupGatt() 触发断连报警
+                    if (bleManager.connectionState.value is BleConnectionState.Connected) {
+                        Log.d("HomeViewModel", "蓝牙已连接，跳过重复连接")
+                        return@launch
+                    }
                     bleManager.setDeviceMacToConnect(savedMac)
                     bleManager.connectDirectly(savedMac)
                     Log.d("HomeViewModel", "已调用 connectDirectly() MAC=$savedMac")

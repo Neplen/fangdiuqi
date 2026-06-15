@@ -86,10 +86,16 @@ class HomeFragment : Fragment() {
     override fun onResume() {
         super.onResume()
 
+        // 核心修复：如果铃声正在播放但弹窗未显示，显示弹窗（处理弹窗丢失的情况）
+        if (viewModel.alarmSoundManager.isPlaying() && alarmDialog == null) {
+            Log.d("HomeFragment", "onResume: 检测到铃声播放中但弹窗未显示，恢复弹窗")
+            val isGoOut = currentAlarmType == "go_out"
+            showAlarmDialog(isGoOutReminder = isGoOut)
+        }
+
         // 如果正在报警，显示弹窗（不自动停止）
         if (viewModel.phoneAlarmTriggered.value) {
             Log.d("HomeFragment", "onResume: 检测到报警状态，显示弹窗")
-            // ==================== 修复：根据 currentAlarmType 显示对应弹窗 ====================
             val isGoOut = currentAlarmType == "go_out"
             showAlarmDialog(isGoOutReminder = isGoOut)
         }

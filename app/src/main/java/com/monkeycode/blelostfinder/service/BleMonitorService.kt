@@ -675,29 +675,38 @@ class BleMonitorService : Service() {
                     bluetoothDisconnectedTime = System.currentTimeMillis()
                     lastShouldTriggerPhoneAlarm = shouldTriggerPhoneAlarm()
 
-                    alarmMutex.withLock {
-                        // 核心修复：如果正在播放出门提醒，不叠加断连报警（避免同时响两种铃声）
-                        if (isAlarmPlaying && currentAlarmType == ALARM_TYPE_GO_OUT) {
-                            Log.d(TAG, "出门提醒播放中，跳过断连自动报警（避免叠加）")
-                        } else if (!isAlarmPlaying && shouldTriggerPhoneAlarm() && !isDisconnectAlarmAcknowledged) {
-                            triggerPhoneAlarmLocked(ALARM_TYPE_DISCONNECT, "断连报警", ignoreDnd = false)
-                        } else if (isDisconnectAlarmAcknowledged) {
-                            Log.d(TAG, "用户已确认断连，跳过断连自动报警")
-                        } else if (isAlarmPlaying) {
-                            Log.d(TAG, "手机报警已在播放中，跳过重复触发")
-                        } else {
-                            Log.d(TAG, "断连报警条件不满足，不触发")
-                        }
-                    }
+                    // 核心修复：检测是否是短时间内重复断连（3秒内），避免cleanupGatt()触发误报警
+                    val timeSinceLastDisconnect = if (lastDisconnectTime != null) {
+                        System.currentTimeMillis() - lastDisconnectTime
+                    } else Long.MAX_VALUE
 
-                    // 修复：首次断连只有防丢器响的问题——延迟1秒后再次检查补偿
-                    serviceScope.launch {
-                        delay(1000)
-                        if (!isAlarmPlaying && shouldTriggerPhoneAlarm() && !isDisconnectAlarmAcknowledged) {
-                            alarmMutex.withLock {
-                                if (!isAlarmPlaying) {
-                                    Log.d(TAG, "延迟补偿：首次断连手机未报警，现在补报")
-                                    triggerPhoneAlarmLocked(ALARM_TYPE_DISCONNECT, "断连报警（延迟补偿）", ignoreDnd = false)
+                    if (timeSinceLastDisconnect < 3000) {
+                        Log.d(TAG, "短时间内重复断连(${timeSinceLastDisconnect}ms)，忽略本次断连报警（可能是cleanupGatt导致）")
+                    } else {
+                        alarmMutex.withLock {
+                            // 核心修复：如果正在播放出门提醒，不叠加断连报警（避免同时响两种铃声）
+                            if (isAlarmPlaying && currentAlarmType == ALARM_TYPE_GO_OUT) {
+                                Log.d(TAG, "出门提醒播放中，跳过断连自动报警（避免叠加）")
+                            } else if (!isAlarmPlaying && shouldTriggerPhoneAlarm() && !isDisconnectAlarmAcknowledged) {
+                                triggerPhoneAlarmLocked(ALARM_TYPE_DISCONNECT, "断连报警", ignoreDnd = false)
+                            } else if (isDisconnectAlarmAcknowledged) {
+                                Log.d(TAG, "用户已确认断连，跳过断连自动报警")
+                            } else if (isAlarmPlaying) {
+                                Log.d(TAG, "手机报警已在播放中，跳过重复触发")
+                            } else {
+                                Log.d(TAG, "断连报警条件不满足，不触发")
+                            }
+                        }
+
+                        // 修复：首次断连只有防丢器响的问题——延迟1秒后再次检查补偿
+                        serviceScope.launch {
+                            delay(1000)
+                            if (!isAlarmPlaying && shouldTriggerPhoneAlarm() && !isDisconnectAlarmAcknowledged) {
+                                alarmMutex.withLock {
+                                    if (!isAlarmPlaying) {
+                                        Log.d(TAG, "延迟补偿：首次断连手机未报警，现在补报")
+                                        triggerPhoneAlarmLocked(ALARM_TYPE_DISCONNECT, "断连报警（延迟补偿）", ignoreDnd = false)
+                                    }
                                 }
                             }
                         }

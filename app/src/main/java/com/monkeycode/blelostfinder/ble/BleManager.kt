@@ -77,11 +77,6 @@ class BleManager @Inject constructor(
 
     private var pendingDisconnectAlarmState: Boolean? = null
 
-    // 核心修复：标记是否是主动断开（cleanupGatt导致），避免Service误判为被动断连
-    @Volatile
-    var isIntentionalDisconnect = false
-        private set
-
     private var deviceMacToConnect: String? = null
 
     private val _connectionState = MutableStateFlow<BleConnectionState>(BleConnectionState.Disconnected)

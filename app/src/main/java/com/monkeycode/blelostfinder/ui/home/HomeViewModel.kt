@@ -267,6 +267,11 @@ class HomeViewModel @Inject constructor(
         _currentAlarmType.value = null
     }
 
+    // 核心修复：供Fragment同步更新报警类型（广播接收器使用）
+    fun setCurrentAlarmType(alarmType: String?) {
+        _currentAlarmType.value = alarmType
+    }
+
     // 出门提醒已合并，无需独立清除方法
 
     fun startMonitoring() {

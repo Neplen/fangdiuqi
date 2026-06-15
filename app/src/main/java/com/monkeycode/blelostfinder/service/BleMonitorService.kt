@@ -699,25 +699,22 @@ class BleMonitorService : Service() {
                         Log.d(TAG, "短时间内重复断连(${timeSinceLastDisconnect}ms)，忽略本次断连报警（cleanupGatt导致）")
                     } else {
                         alarmMutex.withLock {
-                            // 核心修复：如果正在播放出门提醒，不叠加断连报警（避免同时响两种铃声）
-                            if (isAlarmPlaying && currentAlarmType == ALARM_TYPE_GO_OUT) {
-                                Log.d(TAG, "出门提醒播放中，跳过断连自动报警（避免叠加）")
-                            } else if (shouldTriggerPhoneAlarm() && !isDisconnectAlarmAcknowledged) {
-                                // 核心修复：如果正在播放出门提醒，停止它并触发断连报警
-                                // 断连报警优先级高于出门提醒
-                                if (isAlarmPlaying && currentAlarmType == ALARM_TYPE_GO_OUT) {
-                                    stopAlarmIfPlayingLocked()
-                                    Log.d(TAG, "停止出门提醒，准备触发断连报警")
+                            when {
+                                isAlarmPlaying && currentAlarmType == ALARM_TYPE_GO_OUT -> {
+                                    Log.d(TAG, "出门提醒播放中，跳过断连自动报警（避免叠加）")
                                 }
-                                if (!isAlarmPlaying) {
+                                isAlarmPlaying -> {
+                                    Log.d(TAG, "手机报警已在播放中，跳过重复触发")
+                                }
+                                isDisconnectAlarmAcknowledged -> {
+                                    Log.d(TAG, "用户已确认断连，跳过断连自动报警")
+                                }
+                                shouldTriggerPhoneAlarm() -> {
                                     triggerPhoneAlarmLocked(ALARM_TYPE_DISCONNECT, "断连报警", ignoreDnd = false)
                                 }
-                            } else if (isDisconnectAlarmAcknowledged) {
-                                Log.d(TAG, "用户已确认断连，跳过断连自动报警")
-                            } else if (isAlarmPlaying) {
-                                Log.d(TAG, "手机报警已在播放中，跳过重复触发")
-                            } else {
-                                Log.d(TAG, "断连报警条件不满足，不触发")
+                                else -> {
+                                    Log.d(TAG, "断连报警条件不满足，不触发")
+                                }
                             }
                         }
 

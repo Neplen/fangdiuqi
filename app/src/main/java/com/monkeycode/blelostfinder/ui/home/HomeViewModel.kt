@@ -50,6 +50,10 @@ class HomeViewModel @Inject constructor(
     private val _phoneAlarmTriggered = MutableStateFlow(false)
     val phoneAlarmTriggered: StateFlow<Boolean> = _phoneAlarmTriggered.asStateFlow()
 
+    // 核心修复：新增当前报警类型，用于区分断连报警和出门提醒，确保弹窗颜色正确
+    private val _currentAlarmType = MutableStateFlow<String?>(null)
+    val currentAlarmType: StateFlow<String?> = _currentAlarmType.asStateFlow()
+
     // 出门提醒已合并到报警系统，使用统一的弹窗状态
 
     private val _isDeviceBound = MutableStateFlow(false)
@@ -146,6 +150,12 @@ class HomeViewModel @Inject constructor(
                         if (!_phoneAlarmTriggered.value) {
                             _phoneAlarmTriggered.value = true
                         }
+                        // 核心修复：根据报警原因设置报警类型
+                        _currentAlarmType.value = if (event.reason.contains("出门提醒")) {
+                            "go_out"
+                        } else {
+                            "disconnect"
+                        }
                     }
                     else -> {}
                 }
@@ -209,8 +219,9 @@ class HomeViewModel @Inject constructor(
                 _isDeviceAlarmPlaying.value = false
             }
             alarmSoundManager.stopPlaying()
-            // 核心修复：确保弹窗状态被清除，避免重复触发
+            // 核心修复：确保弹窗状态和报警类型被清除，避免重复触发和弹窗颜色错误
             _phoneAlarmTriggered.value = false
+            _currentAlarmType.value = null
 
             val context = getApplication<Application>().applicationContext
             val stopIntent = Intent(context, BleMonitorService::class.java).apply {
@@ -236,8 +247,24 @@ class HomeViewModel @Inject constructor(
         stopPhoneAlarm()
     }
 
+    /**
+     * 检查报警铃声是否正在播放
+     */
+    fun isAlarmSoundPlaying(): Boolean = alarmSoundManager.isPlaying()
+
+    /**
+     * 同步报警状态：如果铃声正在播放但状态未同步，恢复弹窗状态
+     */
+    fun syncAlarmState() {
+        if (alarmSoundManager.isPlaying() && !_phoneAlarmTriggered.value) {
+            _phoneAlarmTriggered.value = true
+            Log.d("HomeViewModel", "同步报警状态：铃声正在播放，恢复弹窗")
+        }
+    }
+
     fun clearPhoneAlertDialog() {
         _phoneAlarmTriggered.value = false
+        _currentAlarmType.value = null
     }
 
     // 出门提醒已合并，无需独立清除方法

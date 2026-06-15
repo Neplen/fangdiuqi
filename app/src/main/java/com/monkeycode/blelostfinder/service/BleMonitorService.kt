@@ -322,9 +322,17 @@ class BleMonitorService : Service() {
             Log.d(TAG, "出门提醒播放中，跳过断连补偿报警")
             return
         }
+        // 核心修复：补偿报警只在断连后10秒内有效，避免WiFi断连后误触发
+        val timeSinceDisconnect = bluetoothDisconnectedTime?.let { 
+            System.currentTimeMillis() - it 
+        } ?: Long.MAX_VALUE
+        if (timeSinceDisconnect > 10000) {
+            Log.d(TAG, "距离断连已超过10秒(${timeSinceDisconnect}ms)，跳过补偿报警")
+            return
+        }
 
         val currentShouldTrigger = shouldTriggerPhoneAlarm()
-        Log.d(TAG, "补偿报警检查: 之前=$lastShouldTriggerPhoneAlarm, 现在=$currentShouldTrigger, 蓝牙断连时间=$bluetoothDisconnectedTime, 已确认=$isDisconnectAlarmAcknowledged, currentAlarmType=$currentAlarmType")
+        Log.d(TAG, "补偿报警检查: 之前=$lastShouldTriggerPhoneAlarm, 现在=$currentShouldTrigger, 蓝牙断连时间=$bluetoothDisconnectedTime, 已确认=$isDisconnectAlarmAcknowledged, currentAlarmType=$currentAlarmType, 距断连=${timeSinceDisconnect}ms")
 
         if (!lastShouldTriggerPhoneAlarm && currentShouldTrigger && bluetoothDisconnectedTime != null) {
             serviceScope.launch {
@@ -509,6 +517,12 @@ class BleMonitorService : Service() {
                         // 合并：出门提醒直接走报警通道，用 ALARM_TYPE_GO_OUT 区分
                         Log.d(TAG, "检测到断开家庭 WiFi，触发出门提醒（合并到报警通道）")
                         alarmMutex.withLock {
+                            // 核心修复：如果正在播放断连报警，停止它并触发出门提醒
+                            // 出门提醒和断连报警是独立的，出门提醒应该能打断断连报警
+                            if (isAlarmPlaying && currentAlarmType == ALARM_TYPE_DISCONNECT) {
+                                stopAlarmIfPlayingLocked()
+                                Log.d(TAG, "停止断连报警，准备触发出门提醒")
+                            }
                             triggerPhoneAlarmLocked(ALARM_TYPE_GO_OUT, "出门提醒", ignoreDnd = false)
                         }
                     }
@@ -675,20 +689,29 @@ class BleMonitorService : Service() {
                     bluetoothDisconnectedTime = System.currentTimeMillis()
                     lastShouldTriggerPhoneAlarm = shouldTriggerPhoneAlarm()
 
-                    // 核心修复：检测是否是短时间内重复断连（3秒内），避免cleanupGatt()触发误报警
+                    // 核心修复：检测是否是短时间内重复断连（500毫秒内），避免cleanupGatt()触发误报警
+                    // cleanupGatt()的disconnect()通常在100-200ms内完成，500ms足够过滤
                     val timeSinceLastDisconnect = if (lastDisconnectTime != null) {
                         System.currentTimeMillis() - lastDisconnectTime
                     } else Long.MAX_VALUE
 
-                    if (timeSinceLastDisconnect < 3000) {
-                        Log.d(TAG, "短时间内重复断连(${timeSinceLastDisconnect}ms)，忽略本次断连报警（可能是cleanupGatt导致）")
+                    if (timeSinceLastDisconnect < 500) {
+                        Log.d(TAG, "短时间内重复断连(${timeSinceLastDisconnect}ms)，忽略本次断连报警（cleanupGatt导致）")
                     } else {
                         alarmMutex.withLock {
                             // 核心修复：如果正在播放出门提醒，不叠加断连报警（避免同时响两种铃声）
                             if (isAlarmPlaying && currentAlarmType == ALARM_TYPE_GO_OUT) {
                                 Log.d(TAG, "出门提醒播放中，跳过断连自动报警（避免叠加）")
-                            } else if (!isAlarmPlaying && shouldTriggerPhoneAlarm() && !isDisconnectAlarmAcknowledged) {
-                                triggerPhoneAlarmLocked(ALARM_TYPE_DISCONNECT, "断连报警", ignoreDnd = false)
+                            } else if (shouldTriggerPhoneAlarm() && !isDisconnectAlarmAcknowledged) {
+                                // 核心修复：如果正在播放出门提醒，停止它并触发断连报警
+                                // 断连报警优先级高于出门提醒
+                                if (isAlarmPlaying && currentAlarmType == ALARM_TYPE_GO_OUT) {
+                                    stopAlarmIfPlayingLocked()
+                                    Log.d(TAG, "停止出门提醒，准备触发断连报警")
+                                }
+                                if (!isAlarmPlaying) {
+                                    triggerPhoneAlarmLocked(ALARM_TYPE_DISCONNECT, "断连报警", ignoreDnd = false)
+                                }
                             } else if (isDisconnectAlarmAcknowledged) {
                                 Log.d(TAG, "用户已确认断连，跳过断连自动报警")
                             } else if (isAlarmPlaying) {
@@ -701,7 +724,7 @@ class BleMonitorService : Service() {
                         // 修复：首次断连只有防丢器响的问题——延迟1秒后再次检查补偿
                         serviceScope.launch {
                             delay(1000)
-                            if (!isAlarmPlaying && shouldTriggerPhoneAlarm() && !isDisconnectAlarmAcknowledged) {
+                            if (shouldTriggerPhoneAlarm() && !isDisconnectAlarmAcknowledged) {
                                 alarmMutex.withLock {
                                     if (!isAlarmPlaying) {
                                         Log.d(TAG, "延迟补偿：首次断连手机未报警，现在补报")
@@ -807,7 +830,8 @@ class BleMonitorService : Service() {
             }
 
             alarmSoundManager.playAlarm(ringtonePath)
-            bleManager.emitAlarmEvent(reason)
+            // 核心修复：传递 alarmType 给 BleManager
+            bleManager.emitAlarmEvent(reason, alarmType)
 
             // 发送广播显示弹窗，带上 alarmType
             val intent = Intent("com.monkeycode.blelostfinder.SHOW_PHONE_ALARM")

@@ -49,9 +49,11 @@ class HomeFragment : Fragment() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
                 "com.monkeycode.blelostfinder.SHOW_PHONE_ALARM" -> {
-                    // ==================== 修复：读取广播中的 alarm_type 区分类型 ====================
+                    // 核心修复：读取广播中的 alarm_type 区分类型
                     val alarmType = intent.getStringExtra("alarm_type") ?: "disconnect"
                     currentAlarmType = alarmType
+                    // 核心修复：同步更新 ViewModel 的报警类型，确保广播丢失时也能正确显示
+                    viewModel.setCurrentAlarmType(alarmType)
                     val isGoOut = alarmType == "go_out"
                     Log.d("HomeFragment", "收到广播，alarmType=$alarmType, isGoOut=$isGoOut")
                     showAlarmDialog(isGoOutReminder = isGoOut)
@@ -86,10 +88,16 @@ class HomeFragment : Fragment() {
     override fun onResume() {
         super.onResume()
 
+        // 核心修复：从ViewModel获取报警类型，确保弹窗显示正确（广播可能丢失）
+        val vmAlarmType = viewModel.currentAlarmType.value
+        if (vmAlarmType != null) {
+            currentAlarmType = vmAlarmType
+        }
+
         // 如果正在报警，显示弹窗（不自动停止）
         if (viewModel.phoneAlarmTriggered.value) {
-            Log.d("HomeFragment", "onResume: 检测到报警状态，显示弹窗")
-            val isGoOut = currentAlarmType == "go_out"
+            Log.d("HomeFragment", "onResume: 检测到报警状态，显示弹窗，type=${viewModel.currentAlarmType.value}")
+            val isGoOut = viewModel.currentAlarmType.value == "go_out"
             showAlarmDialog(isGoOutReminder = isGoOut)
         }
 

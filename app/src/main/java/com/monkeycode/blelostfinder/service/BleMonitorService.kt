@@ -114,6 +114,7 @@ class BleMonitorService : Service() {
     private var lastWifiDndActiveState = false
     private var lastShouldTriggerPhoneAlarm = false
     private var bluetoothDisconnectedTime: Long? = null
+    private var lastConnectedTime: Long? = null
 
     private var lastSyncedDisconnectAlarmState: Boolean? = null
 
@@ -159,6 +160,9 @@ class BleMonitorService : Service() {
                         } else {
                             Log.d(TAG, "用户已确认出门提醒，不影响断连报警确认标志")
                         }
+                        // 核心修复：用户确认后设置 lastShouldTriggerPhoneAlarm = true，防止 checkCompensateAlarm 误触发
+                        lastShouldTriggerPhoneAlarm = true
+                        Log.d(TAG, "用户已确认报警，设置 lastShouldTriggerPhoneAlarm=true，防止补偿报警")
                     }
                 }
             }
@@ -636,6 +640,8 @@ class BleMonitorService : Service() {
             when (state) {
                 is BleConnectionState.Connected -> {
                     Log.d(TAG, "Connected to device，连接成功")
+                    // 核心修复：记录连接成功时间，用于区分主动断开和被动断连
+                    lastConnectedTime = System.currentTimeMillis()
                     // 核心修复：重新连接后，重置"用户已确认"标志，允许下次断连正常报警
                     isDisconnectAlarmAcknowledged = false
                     bluetoothDisconnectedTime = null
@@ -810,6 +816,13 @@ class BleMonitorService : Service() {
         if (isAlarmPlaying && currentAlarmType == alarmType) {
             Log.d(TAG, "同类型报警已在播放中，跳过重复触发: type=$alarmType")
             return
+        }
+
+        // 核心修复：如果 isAlarmPlaying=true 但铃声已停止，说明上次报警未正确清理，重置状态
+        if (isAlarmPlaying && !alarmSoundManager.isPlaying()) {
+            Log.d(TAG, "isAlarmPlaying=true 但铃声已停止，重置状态")
+            isAlarmPlaying = false
+            currentAlarmType = null
         }
 
         isAlarmPlaying = true

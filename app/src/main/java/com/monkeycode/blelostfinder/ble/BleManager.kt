@@ -88,7 +88,7 @@ class BleManager @Inject constructor(
     private val _batteryLevel = MutableStateFlow(-1)
     val batteryLevel: StateFlow<Int> = _batteryLevel.asStateFlow()
 
-    private val _bleEvents = MutableSharedFlow<BleEvent>(replay = 0, extraBufferCapacity = 1)
+    private val _bleEvents = MutableSharedFlow<BleEvent>(replay = 1, extraBufferCapacity = 5)
     val bleEvents: SharedFlow<BleEvent> = _bleEvents.asSharedFlow()
 
     // ===== 修改：新增已连接设备名称 Flow，供主页动态显示 =====
@@ -180,6 +180,7 @@ class BleManager @Inject constructor(
                     _connectedDeviceName.value = gatt.device.name ?: "未知设备"
                     gatt.discoverServices()
                     startRssiPolling()
+                    startConnectionAliveCheck()  // 核心修复：启动连接活性检测
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.d(TAG, "设备已断开，准备自动重连...")
@@ -208,6 +209,8 @@ class BleManager @Inject constructor(
 
                     rssiPollingJob?.cancel()
                     rssiPollingJob = null
+                    connectionAliveCheckJob?.cancel()  // 核心修复：取消活性检测
+                    connectionAliveCheckJob = null
 
                     // 核心修复：只有非主动断开时才发送断连事件，避免Service误判
                     if (!isIntentionalDisconnect) {
@@ -222,6 +225,9 @@ class BleManager @Inject constructor(
                     } else {
                         Log.d(TAG, "主动断开，不发送断连事件到Service")
                     }
+                    // 核心修复：重置主动断开标志，为下次被动断连做准备
+                    isIntentionalDisconnect = false
+                    Log.d(TAG, "已重置 isIntentionalDisconnect = false")
 
                     deviceMacToConnect?.let { mac ->
                         mainHandler.postDelayed({
@@ -496,6 +502,8 @@ class BleManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     fun connectDirectly(macAddress: String) {
+        isIntentionalDisconnect = true
+        Log.d(TAG, "connectDirectly: 设置主动断开标志，准备连接: $macAddress")
         try {
             deviceMacToConnect = macAddress
 
@@ -540,6 +548,105 @@ class BleManager @Inject constructor(
     }
 
     private var rssiPollingJob: kotlinx.coroutines.Job? = null
+    private var connectionAliveCheckJob: kotlinx.coroutines.Job? = null
+
+    // ==================== 核心修复：连接活性检测 ====================
+    /**
+     * 启动连接活性检测（心跳）
+     * 每5秒读取一次RSSI，连续3次失败则强制标记断开
+     * 解决 Android BLE onConnectionStateChange 回调丢失导致不报警的问题
+     */
+    private fun startConnectionAliveCheck() {
+        connectionAliveCheckJob?.cancel()
+        connectionAliveCheckJob = managerScope.launch {
+            var consecutiveFailures = 0
+            while (true) {
+                delay(5000)
+                if (bluetoothGatt == null || _connectionState.value !is BleConnectionState.Connected) {
+                    Log.d(TAG, "活性检测停止：GATT为空或未连接")
+                    break
+                }
+                try {
+                    val success = bluetoothGatt?.readRemoteRssi() ?: false
+                    if (!success) {
+                        consecutiveFailures++
+                        Log.w(TAG, "连接活性检测失败，连续失败次数: $consecutiveFailures")
+                        if (consecutiveFailures >= 3) {
+                            Log.e(TAG, "连接活性检测连续3次失败，强制标记为断开")
+                            forceDisconnect()
+                            break
+                        }
+                    } else {
+                        if (consecutiveFailures > 0) {
+                            Log.d(TAG, "连接活性检测恢复，重置失败计数")
+                        }
+                        consecutiveFailures = 0
+                    }
+                } catch (e: Exception) {
+                    consecutiveFailures++
+                    Log.e(TAG, "连接活性检测异常: $consecutiveFailures/3", e)
+                    if (consecutiveFailures >= 3) {
+                        forceDisconnect()
+                        break
+                    }
+                }
+            }
+        }
+        Log.d(TAG, "连接活性检测已启动")
+    }
+
+    /**
+     * 强制断开连接并触发断连处理
+     * 用于活性检测失败时，绕过可能丢失的 onConnectionStateChange 回调
+     */
+    private fun forceDisconnect() {
+        Log.e(TAG, "forceDisconnect: 强制断开连接")
+        try {
+            bluetoothGatt?.close()
+        } catch (e: Exception) {
+            Log.e(TAG, "forceDisconnect: 关闭GATT异常", e)
+        }
+        bluetoothGatt = null
+        alertCharacteristic = null
+        batteryCharacteristic = null
+        customCharacteristic = null
+        disconnectAlarmCharacteristic = null
+        pendingDisconnectAlarmState = null
+        writeQueue.clear()
+        isWriting = false
+
+        rssiPollingJob?.cancel()
+        rssiPollingJob = null
+        connectionAliveCheckJob?.cancel()
+        connectionAliveCheckJob = null
+
+        _connectionState.value = BleConnectionState.Disconnected
+        _rssi.value = -100
+
+        // 发送断连事件到Service
+        if (!isIntentionalDisconnect) {
+            managerScope.launch {
+                try {
+                    _bleEvents.emit(BleEvent.Disconnected)
+                    Log.d(TAG, "forceDisconnect: 发送被动断连事件")
+                } catch (e: Exception) {
+                    Log.e(TAG, "forceDisconnect: 发送断连事件失败", e)
+                }
+            }
+        }
+
+        // 触发自动重连
+        deviceMacToConnect?.let { mac ->
+            mainHandler.postDelayed({
+                try {
+                    Log.d(TAG, "forceDisconnect: 延迟3秒后自动重连: $mac")
+                    scheduleReconnect(mac)
+                } catch (e: Exception) {
+                    Log.e(TAG, "forceDisconnect: 自动重连失败", e)
+                }
+            }, 3000)
+        }
+    }
 
     private fun startRssiPolling() {
         rssiPollingJob?.cancel()
@@ -574,6 +681,8 @@ class BleManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     fun disconnect() {
+        isIntentionalDisconnect = true
+        Log.d(TAG, "disconnect: 设置主动断开标志")
         try {
             bluetoothGatt?.let { gatt ->
                 try {
@@ -694,6 +803,8 @@ class BleManager @Inject constructor(
     // ===== 修改：reconnectIfDisconnected 不再使用硬编码 MAC，改为从 DataStore 读取 =====
     // 由 BleMonitorService 或 HomeViewModel 传入实际保存的 MAC
     fun reconnectIfDisconnected(macAddress: String? = deviceMacToConnect) {
+        isIntentionalDisconnect = true
+        Log.d(TAG, "reconnectIfDisconnected: 设置主动断开标志")
         val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
 
         if (macAddress != null && currentAdapter != null && currentAdapter.isEnabled) {
@@ -723,6 +834,8 @@ class BleManager @Inject constructor(
     }
 
     private fun cleanupGatt() {
+        isIntentionalDisconnect = true
+        Log.d(TAG, "cleanupGatt: 设置主动断开标志")
         bluetoothGatt?.let { oldGatt ->
             try {
                 Log.d(TAG, "清理旧 GATT 资源")

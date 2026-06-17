@@ -117,6 +117,8 @@ class BleMonitorService : Service() {
     private var lastConnectedTime: Long? = null
 
     private var lastSyncedDisconnectAlarmState: Boolean? = null
+    // 核心修复：记录上次连接状态，只有从Connected变为Disconnected才触发报警
+    private var lastConnectionState: BleConnectionState? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -125,6 +127,16 @@ class BleMonitorService : Service() {
         wifiManager = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
         createNotificationChannel()
         _isRunning.value = true
+
+        // ==================== 核心修复：启动时强制重置所有报警状态 ====================
+        // 防止上次Service被杀/崩溃后状态残留，导致本次跳过报警
+        isAlarmPlaying = false
+        currentAlarmType = null
+        isDisconnectAlarmAcknowledged = false
+        bluetoothDisconnectedTime = null
+        lastShouldTriggerPhoneAlarm = false
+        lastConnectionState = null
+        Log.d(TAG, "启动时重置所有报警状态完成")
 
         // 注册 WiFi 监听
         wifiMonitor.register()
@@ -326,12 +338,12 @@ class BleMonitorService : Service() {
             Log.d(TAG, "出门提醒播放中，跳过断连补偿报警")
             return
         }
-        // 核心修复：补偿报警只在断连后10秒内有效，避免WiFi断连后误触发
+        // 核心修复：补偿报警只在断连后30秒内有效，给WiFi状态刷新更多时间
         val timeSinceDisconnect = bluetoothDisconnectedTime?.let { 
             System.currentTimeMillis() - it 
         } ?: Long.MAX_VALUE
-        if (timeSinceDisconnect > 10000) {
-            Log.d(TAG, "距离断连已超过10秒(${timeSinceDisconnect}ms)，跳过补偿报警")
+        if (timeSinceDisconnect > 30000) {
+            Log.d(TAG, "距离断连已超过30秒(${timeSinceDisconnect}ms)，跳过补偿报警")
             return
         }
 
@@ -640,6 +652,7 @@ class BleMonitorService : Service() {
             when (state) {
                 is BleConnectionState.Connected -> {
                     Log.d(TAG, "Connected to device，连接成功")
+                    lastConnectionState = state  // 核心修复：记录状态
                     // 核心修复：记录连接成功时间，用于区分主动断开和被动断连
                     lastConnectedTime = System.currentTimeMillis()
                     // 核心修复：重新连接后，重置"用户已确认"标志，允许下次断连正常报警
@@ -666,6 +679,28 @@ class BleMonitorService : Service() {
                 }
                 is BleConnectionState.Disconnected -> {
                     Log.d(TAG, "Disconnected from device，设备已断开")
+
+                    // ==================== 核心修复：只有从Connected变为Disconnected才触发报警 ====================
+                    // 避免 Connecting→Disconnected（连接失败）、重复Disconnected、或cleanupGatt导致的误报警
+                    val previousState = lastConnectionState
+                    lastConnectionState = state
+
+                    if (previousState !is BleConnectionState.Connected) {
+                        Log.d(TAG, "非从Connected变为Disconnected（previous=$previousState），跳过断连报警处理，仅记录和重连")
+                        recordDisconnectionLocation(deviceMac ?: "")
+                        currentDevice?.let { device ->
+                            deviceRepository.updateDevice(device.copy(
+                                lastDisconnectedTime = System.currentTimeMillis(),
+                                updatedAt = System.currentTimeMillis()
+                            ))
+                        }
+                        bluetoothDisconnectedTime = System.currentTimeMillis()
+                        deviceMac?.let { mac ->
+                            bleManager.reconnectIfDisconnected(mac)
+                        }
+                        return@launch
+                    }
+                    lastConnectionState = state
 
                     recordDisconnectionLocation(deviceMac ?: "")
 
@@ -739,9 +774,11 @@ class BleMonitorService : Service() {
                     }
                 }
                 is BleConnectionState.Connecting -> {
+                    lastConnectionState = state  // 核心修复：记录状态
                     Log.d(TAG, "Connecting to device，连接中...")
                 }
                 is BleConnectionState.Error -> {
+                    lastConnectionState = state  // 核心修复：记录状态
                     Log.e(TAG, "BLE Error: ${state.message}")
                 }
                 else -> {}
@@ -823,6 +860,12 @@ class BleMonitorService : Service() {
             Log.d(TAG, "isAlarmPlaying=true 但铃声已停止，重置状态")
             isAlarmPlaying = false
             currentAlarmType = null
+        }
+
+        // 核心修复：再次检查isAlarmPlaying，防止并发竞争
+        if (isAlarmPlaying) {
+            Log.d(TAG, "并发检查：isAlarmPlaying已为true，跳过触发: type=$alarmType")
+            return
         }
 
         isAlarmPlaying = true

@@ -40,24 +40,15 @@ class HomeFragment : Fragment() {
     // 弹窗引用
     private var alarmDialog: androidx.appcompat.app.AlertDialog? = null
 
-    // ==================== 修复：增加当前报警类型记录 ====================
-    // 用于区分断连报警("disconnect")和出门提醒("go_out")，决定弹窗颜色和内容
-    private var currentAlarmType: String? = null
+    // 出门提醒弹窗引用
+    private var goOutReminderDialog: androidx.appcompat.app.AlertDialog? = null
 
-    // 广播接收器（出门提醒和报警共用）
-    private val alarmReceiver = object : BroadcastReceiver() {
+    // 广播接收器
+    private val goOutReminderReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            when (intent.action) {
-                "com.monkeycode.blelostfinder.SHOW_PHONE_ALARM" -> {
-                    // 核心修复：读取广播中的 alarm_type 区分类型
-                    val alarmType = intent.getStringExtra("alarm_type") ?: "disconnect"
-                    currentAlarmType = alarmType
-                    // 核心修复：同步更新 ViewModel 的报警类型，确保广播丢失时也能正确显示
-                    viewModel.setCurrentAlarmType(alarmType)
-                    val isGoOut = alarmType == "go_out"
-                    Log.d("HomeFragment", "收到广播，alarmType=$alarmType, isGoOut=$isGoOut")
-                    showAlarmDialog(isGoOutReminder = isGoOut)
-                }
+            if (intent.action == "com.monkeycode.blelostfinder.SHOW_GO_OUT_REMINDER") {
+                Log.d("HomeFragment", "收到出门提醒广播，显示弹窗")
+                showGoOutReminderDialog()
             }
         }
     }
@@ -77,28 +68,25 @@ class HomeFragment : Fragment() {
         setupObservers()
         setupClickListeners()
 
-        // 注册广播接收器（同时监听报警和出门提醒）
-        val filter = IntentFilter().apply {
-            addAction("com.monkeycode.blelostfinder.SHOW_PHONE_ALARM")
-        }
-        requireContext().registerReceiver(alarmReceiver, filter)
-        Log.d("HomeFragment", "Alarm receiver registered")
+        // 注册广播接收器
+        val filter = IntentFilter("com.monkeycode.blelostfinder.SHOW_GO_OUT_REMINDER")
+        requireContext().registerReceiver(goOutReminderReceiver, filter)
+        Log.d("HomeFragment", "Go out reminder receiver registered")
     }
 
     override fun onResume() {
         super.onResume()
 
-        // 核心修复：从ViewModel获取报警类型，确保弹窗显示正确（广播可能丢失）
-        val vmAlarmType = viewModel.currentAlarmType.value
-        if (vmAlarmType != null) {
-            currentAlarmType = vmAlarmType
-        }
-
         // 如果正在报警，显示弹窗（不自动停止）
         if (viewModel.phoneAlarmTriggered.value) {
-            Log.d("HomeFragment", "onResume: 检测到报警状态，显示弹窗，type=${viewModel.currentAlarmType.value}")
-            val isGoOut = viewModel.currentAlarmType.value == "go_out"
-            showAlarmDialog(isGoOutReminder = isGoOut)
+            Log.d("HomeFragment", "onResume: 检测到报警状态，显示弹窗")
+            showPhoneAlarmDialog()
+        }
+
+        // 如果正在出门提醒，显示弹窗
+        if (viewModel.goOutReminderTriggered.value) {
+            Log.d("HomeFragment", "onResume: 检测出门提醒状态，显示弹窗")
+            showGoOutReminderDialog()
         }
 
         // 只有已绑定设备且当前断开时才自动重连
@@ -164,9 +152,16 @@ class HomeFragment : Fragment() {
                 launch {
                     viewModel.phoneAlarmTriggered.collect { triggered ->
                         if (triggered) {
-                            // ==================== 修复：根据 currentAlarmType 显示对应弹窗 ====================
-                            val isGoOut = currentAlarmType == "go_out"
-                            showAlarmDialog(isGoOutReminder = isGoOut)
+                            showPhoneAlarmDialog()
+                        }
+                    }
+                }
+
+                // 新增：监听出门提醒触发状态
+                launch {
+                    viewModel.goOutReminderTriggered.collect { triggered ->
+                        if (triggered) {
+                            showGoOutReminderDialog()
                         }
                     }
                 }
@@ -280,71 +275,96 @@ class HomeFragment : Fragment() {
         }
     }
 
-    // 统一的报警/提醒弹窗
-    private fun showAlarmDialog(isGoOutReminder: Boolean = false) {
+    private fun showPhoneAlarmDialog() {
         alarmDialog?.dismiss()
+        val deviceName = viewModel.connectedDeviceName.value
+            ?: viewModel.device.value?.name
+            ?: "防丢器"
 
-        val title: String
-        val messageText: String
-        val textColor: Int
-
-        if (isGoOutReminder) {
-            title = "出门提醒"
-            messageText = "主人，主人，检查一下，你的钥匙带没带？"
-            textColor = requireContext().getColor(android.R.color.holo_blue_dark) // 蓝色
-        } else {
-            val deviceName = viewModel.connectedDeviceName.value
-                ?: viewModel.device.value?.name
-                ?: "防丢器"
-            title = "[$deviceName] 正在寻找您的手机"
-            messageText = "按下防丢器按钮两次可以停止报警"
-            textColor = requireContext().getColor(android.R.color.holo_red_dark) // 红色
-        }
-
-        val message = SpannableString(messageText)
+        val message = SpannableString("按下防丢器按钮两次可以停止报警")
         message.setSpan(
             AbsoluteSizeSpan(24, true),
             0,
             message.length,
             Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
         )
-        // 设置文字颜色
+        // 修复：报警弹窗文字红色加粗
         message.setSpan(
-            android.text.style.ForegroundColorSpan(textColor),
+            android.text.style.StyleSpan(android.graphics.Typeface.BOLD),
+            0,
+            message.length,
+            Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
+        message.setSpan(
+            android.text.style.ForegroundColorSpan(requireContext().getColor(android.R.color.holo_red_dark)),
             0,
             message.length,
             Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
         )
 
         alarmDialog = MaterialAlertDialogBuilder(requireContext())
-            .setTitle(title)
+            .setTitle("[$deviceName] 正在寻找您的手机")
             .setMessage(message)
             .setPositiveButton("好的") { _, _ ->
-                if (isGoOutReminder) {
-                    viewModel.stopGoOutReminder()
-                } else {
-                    viewModel.stopPhoneAlarm()
-                }
+                viewModel.stopPhoneAlarm()
                 dismissAlarmDialog()
             }
             .setCancelable(false)
             .show()
-
-        Log.d("HomeFragment", "弹窗已显示: ${if (isGoOutReminder) "出门提醒(蓝)" else "断连报警(红)"}")
     }
 
-    // 兼容旧调用
-    private fun showPhoneAlarmDialog() {
-        showAlarmDialog(isGoOutReminder = false)
+    // 显示出门提醒弹窗
+    private fun showGoOutReminderDialog() {
+        // 如果报警弹窗正在显示，不显示出门提醒弹窗（报警优先级更高）
+        if (alarmDialog?.isShowing == true) {
+            Log.d("HomeFragment", "报警弹窗正在显示，跳过出门提醒弹窗")
+            return
+        }
+
+        goOutReminderDialog?.dismiss()
+
+        val message = SpannableString("主人，主人，检查一下，你的钥匙带没带？")
+        message.setSpan(
+            AbsoluteSizeSpan(24, true),
+            0,
+            message.length,
+            Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
+        // 修复：提醒弹窗文字蓝色加粗
+        message.setSpan(
+            android.text.style.StyleSpan(android.graphics.Typeface.BOLD),
+            0,
+            message.length,
+            Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
+        message.setSpan(
+            android.text.style.ForegroundColorSpan(requireContext().getColor(android.R.color.holo_blue_dark)),
+            0,
+            message.length,
+            Spannable.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
+
+        goOutReminderDialog = MaterialAlertDialogBuilder(requireContext())
+            .setTitle("出门提醒")
+            .setMessage(message)
+            .setPositiveButton("好的") { _, _ ->
+                viewModel.stopGoOutReminder()
+                dismissGoOutReminderDialog()
+            }
+            .setCancelable(false)
+            .show()
+
+        Log.d("HomeFragment", "出门提醒弹窗已显示")
+    }
+
+    private fun dismissGoOutReminderDialog() {
+        goOutReminderDialog?.dismiss()
+        goOutReminderDialog = null
     }
 
     private fun dismissAlarmDialog() {
         alarmDialog?.dismiss()
         alarmDialog = null
-        // 核心修复：清空报警类型，避免状态残留影响下次弹窗
-        currentAlarmType = null
-        // 核心修复：确保ViewModel中的弹窗状态被清除，避免重复触发
-        viewModel.clearPhoneAlertDialog()
     }
 
     private fun updateConnectionState(state: BleConnectionState) {
@@ -385,11 +405,13 @@ class HomeFragment : Fragment() {
 
     override fun onDestroyView() {
         dismissAlarmDialog()
+        dismissGoOutReminderDialog()
         viewModel.stopPhoneAlarm()
+        viewModel.stopGoOutReminder()
 
         try {
-            requireContext().unregisterReceiver(alarmReceiver)
-            Log.d("HomeFragment", "Alarm receiver unregistered")
+            requireContext().unregisterReceiver(goOutReminderReceiver)
+            Log.d("HomeFragment", "Go out reminder receiver unregistered")
         } catch (e: Exception) {
             Log.e("HomeFragment", "Unregister receiver failed", e)
         }

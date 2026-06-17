@@ -329,28 +329,17 @@ class AlarmSoundManager @Inject constructor(
         }
     }
 
-
     /**
      * 将用户选择的本地铃声文件复制到应用私有目录，确保重启后仍然可用
+     * @param sourceUri 用户选择的文件URI
+     * @return 私有目录中的文件路径，失败返回null
      */
-    fun copyRingtoneToPrivateDir(sourceUri: android.net.Uri): String? {
-        return try {
+    fun copyRingtoneToPrivate(sourceUri: android.net.Uri, fileName: String): String? {
+        try {
             val privateDir = File(contextApp.filesDir, "ringtones")
             if (!privateDir.exists()) {
                 privateDir.mkdirs()
             }
-
-            // 从URI获取文件名
-            val fileName = try {
-                contextApp.contentResolver.query(sourceUri, null, null, null, null)?.use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                        if (nameIndex >= 0) cursor.getString(nameIndex) else null
-                    } else null
-                }
-            } catch (e: Exception) {
-                null
-            } ?: "custom_ringtone_${System.currentTimeMillis()}.mp3"
 
             val destFile = File(privateDir, fileName)
 
@@ -361,10 +350,10 @@ class AlarmSoundManager @Inject constructor(
             }
 
             Log.d(TAG, "铃声已复制到私有目录: ${destFile.absolutePath}")
-            destFile.absolutePath
+            return destFile.absolutePath
         } catch (e: Exception) {
             Log.e(TAG, "复制铃声到私有目录失败", e)
-            null
+            return null
         }
     }
 

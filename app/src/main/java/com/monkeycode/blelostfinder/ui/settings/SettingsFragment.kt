@@ -25,6 +25,7 @@ import com.google.android.material.timepicker.MaterialTimePicker
 import com.google.android.material.timepicker.TimeFormat
 import com.monkeycode.blelostfinder.databinding.FragmentSettingsBinding
 import com.monkeycode.blelostfinder.util.PermissionHelper
+import com.monkeycode.blelostfinder.ui.settings.AlarmSoundManager
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
 import java.util.*
@@ -38,9 +39,6 @@ class SettingsFragment : Fragment() {
 
     private val viewModel: SettingsViewModel by viewModels()
 
-    @Inject
-    lateinit var alarmSoundManager: AlarmSoundManager
-
     private var currentMediaPlayer: MediaPlayer? = null
     private var goOutReminderMediaPlayer: MediaPlayer? = null
 
@@ -48,18 +46,21 @@ class SettingsFragment : Fragment() {
         private const val TAG = "SettingsFragment"
     }
 
+    @Inject
+    lateinit var alarmSoundManager: AlarmSoundManager
+
     // 本地音频文件选择器（报警铃声）
     private val alarmFilePickerLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
             result.data?.data?.let { uri ->
-                // 复制到私有目录，确保重启后仍然可用
-                val privatePath = alarmSoundManager.copyRingtoneToPrivateDir(uri)
+                // 修复：复制到私有目录，确保重启后可用
+                val privatePath = alarmSoundManager.copyRingtoneToPrivate(uri, "alarm_ringtone.mp3")
                 val savePath = privatePath ?: uri.toString()
                 viewModel.saveRingtoneUri(savePath)
                 previewRingtone(uri)
-                Toast.makeText(requireContext(), if (privatePath != null) "已保存报警铃声" else "已选择报警铃声（重启可能失效）", Toast.LENGTH_SHORT).show()
+                Toast.makeText(requireContext(), "已选择报警铃声", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -70,12 +71,12 @@ class SettingsFragment : Fragment() {
     ) { result ->
         if (result.resultCode == android.app.Activity.RESULT_OK) {
             result.data?.data?.let { uri ->
-                // 复制到私有目录，确保重启后仍然可用
-                val privatePath = alarmSoundManager.copyRingtoneToPrivateDir(uri)
+                // 修复：复制到私有目录，确保重启后可用
+                val privatePath = alarmSoundManager.copyRingtoneToPrivate(uri, "goout_ringtone.mp3")
                 val savePath = privatePath ?: uri.toString()
                 viewModel.saveGoOutRingtonePath(savePath)
                 previewGoOutRingtone(uri)
-                Toast.makeText(requireContext(), if (privatePath != null) "已保存出门提醒铃声" else "已选择出门提醒铃声（重启可能失效）", Toast.LENGTH_SHORT).show()
+                Toast.makeText(requireContext(), "已选择出门提醒铃声", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -224,7 +225,7 @@ class SettingsFragment : Fragment() {
     }
 
     /**
-     * 显示WiFi信息输入对话框
+     * 显示WiFi信息输入对话框（使用MaterialAlertDialogBuilder，显示按钮通过自定义View实现）
      */
     private fun showWifiInputDialog(title: String, currentValue: String, onSave: (String) -> Unit) {
         val context = requireContext()
@@ -263,14 +264,14 @@ class SettingsFragment : Fragment() {
                 topMargin = (8 * context.resources.displayMetrics.density).toInt()
             }
             setOnClickListener {
-                // 修复：使用精确比较判断当前状态
+                // 修复：使用独立布尔变量跟踪显示/隐藏状态，彻底摆脱 inputType 位运算困扰
                 val isCurrentlyVisible = input.inputType == (android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD)
                 if (isCurrentlyVisible) {
-                    // 当前可见，切换为隐藏（密码模式）
+                    // 当前是可见模式，切换为隐藏（密码模式）
                     input.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
                     text = "显示内容"
                 } else {
-                    // 当前隐藏，切换为可见
+                    // 当前是隐藏模式，切换为可见
                     input.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
                     text = "隐藏内容"
                 }

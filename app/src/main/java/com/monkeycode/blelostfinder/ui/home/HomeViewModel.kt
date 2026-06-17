@@ -50,11 +50,9 @@ class HomeViewModel @Inject constructor(
     private val _phoneAlarmTriggered = MutableStateFlow(false)
     val phoneAlarmTriggered: StateFlow<Boolean> = _phoneAlarmTriggered.asStateFlow()
 
-    // 核心修复：新增当前报警类型，用于区分断连报警和出门提醒，确保弹窗颜色正确
-    private val _currentAlarmType = MutableStateFlow<String?>(null)
-    val currentAlarmType: StateFlow<String?> = _currentAlarmType.asStateFlow()
-
-    // 出门提醒已合并到报警系统，使用统一的弹窗状态
+    // 新增：出门提醒弹窗触发状态（独立于断连报警）
+    private val _goOutReminderTriggered = MutableStateFlow(false)
+    val goOutReminderTriggered: StateFlow<Boolean> = _goOutReminderTriggered.asStateFlow()
 
     private val _isDeviceBound = MutableStateFlow(false)
     val isDeviceBound: StateFlow<Boolean> = _isDeviceBound.asStateFlow()
@@ -64,9 +62,11 @@ class HomeViewModel @Inject constructor(
         observeBleState()
         observeBleEvents()
 
-        // 核心修复：移除启动时检查alarmSoundManager.isPlaying()，避免MediaPlayer残留导致误触发
-        // 弹窗状态由Service广播或BLE事件驱动，不依赖MediaPlayer状态
-        Log.d("HomeViewModel", "初始化完成，等待Service广播或BLE事件触发弹窗")
+        // 启动时如果正在响铃，显示弹窗
+        if (alarmSoundManager.isPlaying()) {
+            _phoneAlarmTriggered.value = true
+            Log.d("HomeViewModel", "启动时检测到正在响铃，显示弹窗")
+        }
     }
 
     private fun checkDeviceBound() {
@@ -78,13 +78,7 @@ class HomeViewModel @Inject constructor(
 
             if (hasDevice) {
                 loadDevice(savedMac!!)
-                // 核心修复：如果监控服务已在运行，说明蓝牙已连接或正在连接，不重复发起
-                // 避免 connectDirectly() 的 cleanupGatt() 触发断连报警
-                if (!BleMonitorService.isRunning.value) {
-                    connectToDevice()
-                } else {
-                    Log.d("HomeViewModel", "监控服务已在运行，跳过自动连接，避免重复断连")
-                }
+                connectToDevice()
             } else {
                 Log.d("HomeViewModel", "未绑定设备，等待用户扫描绑定")
             }
@@ -96,11 +90,6 @@ class HomeViewModel @Inject constructor(
             try {
                 val savedMac = settingsManager.deviceMac.firstOrNull()
                 if (!savedMac.isNullOrEmpty()) {
-                    // 核心修复：如果蓝牙已连接，不重复发起连接，避免 cleanupGatt() 触发断连报警
-                    if (bleManager.connectionState.value is BleConnectionState.Connected) {
-                        Log.d("HomeViewModel", "蓝牙已连接，跳过重复连接")
-                        return@launch
-                    }
                     bleManager.setDeviceMacToConnect(savedMac)
                     bleManager.connectDirectly(savedMac)
                     Log.d("HomeViewModel", "已调用 connectDirectly() MAC=$savedMac")
@@ -149,12 +138,6 @@ class HomeViewModel @Inject constructor(
                         Log.d("HomeViewModel", "收到报警事件：${event.reason}")
                         if (!_phoneAlarmTriggered.value) {
                             _phoneAlarmTriggered.value = true
-                        }
-                        // 核心修复：根据报警原因设置报警类型
-                        _currentAlarmType.value = if (event.reason.contains("出门提醒")) {
-                            "go_out"
-                        } else {
-                            "disconnect"
                         }
                     }
                     else -> {}
@@ -219,9 +202,7 @@ class HomeViewModel @Inject constructor(
                 _isDeviceAlarmPlaying.value = false
             }
             alarmSoundManager.stopPlaying()
-            // 核心修复：确保弹窗状态和报警类型被清除，避免重复触发和弹窗颜色错误
             _phoneAlarmTriggered.value = false
-            _currentAlarmType.value = null
 
             val context = getApplication<Application>().applicationContext
             val stopIntent = Intent(context, BleMonitorService::class.java).apply {
@@ -241,38 +222,37 @@ class HomeViewModel @Inject constructor(
     }
 
     /**
-     * 停止出门提醒（已合并到报警系统，直接调用 stopPhoneAlarm）
+     * 停止出门提醒（独立方法，不影响断连报警状态）
      */
     fun stopGoOutReminder() {
-        stopPhoneAlarm()
-    }
+        try {
+            alarmSoundManager.stopPlaying()
+            _goOutReminderTriggered.value = false
 
-    /**
-     * 检查报警铃声是否正在播放
-     */
-    fun isAlarmSoundPlaying(): Boolean = alarmSoundManager.isPlaying()
+            val context = getApplication<Application>().applicationContext
+            val stopIntent = Intent(context, BleMonitorService::class.java).apply {
+                action = BleMonitorService.ACTION_STOP_GO_OUT_REMINDER
+            }
+            try {
+                context.startService(stopIntent)
+                Log.d("HomeViewModel", "已通知 Service 停止出门提醒")
+            } catch (e: Exception) {
+                Log.e("HomeViewModel", "通知 Service 停止出门提醒失败", e)
+            }
 
-    /**
-     * 同步报警状态：如果铃声正在播放但状态未同步，恢复弹窗状态
-     */
-    fun syncAlarmState() {
-        if (alarmSoundManager.isPlaying() && !_phoneAlarmTriggered.value) {
-            _phoneAlarmTriggered.value = true
-            Log.d("HomeViewModel", "同步报警状态：铃声正在播放，恢复弹窗")
+            Log.d("HomeViewModel", "停止出门提醒")
+        } catch (e: Exception) {
+            Log.e("HomeViewModel", "停止出门提醒失败", e)
         }
     }
 
     fun clearPhoneAlertDialog() {
         _phoneAlarmTriggered.value = false
-        _currentAlarmType.value = null
     }
 
-    // 核心修复：供Fragment同步更新报警类型（广播接收器使用）
-    fun setCurrentAlarmType(alarmType: String?) {
-        _currentAlarmType.value = alarmType
+    fun clearGoOutReminderDialog() {
+        _goOutReminderTriggered.value = false
     }
-
-    // 出门提醒已合并，无需独立清除方法
 
     fun startMonitoring() {
         try {

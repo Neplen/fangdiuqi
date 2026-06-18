@@ -48,7 +48,7 @@ class BleScanner @Inject constructor(
             val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
             bluetoothAdapter = bluetoothManager?.adapter
             scanner = bluetoothAdapter?.bluetoothLeScanner
-            
+
             if (bluetoothAdapter == null) {
                 Log.e(TAG, "设备不支持蓝牙")
             } else {
@@ -68,37 +68,42 @@ class BleScanner @Inject constructor(
     @SuppressLint("MissingPermission")
     fun startScan(): Flow<ScanResultWrapper> = channelFlow {
         try {
-            // 重新获取蓝牙适配器，确保用户手动开启蓝牙后能正确检测
+            // ==================== 核心修复：每次扫描前重新获取蓝牙适配器和扫描器 ====================
+            // 问题：如果蓝牙出现过错误（如GATT僵死），旧的 scanner 引用可能失效
+            // 表现：startScan() 后 onScanResult 从不回调，显示0设备
+            // 修复：每次扫描都重新从系统获取最新的 BluetoothLeScanner 实例
             val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
-            
+
             if (currentAdapter == null) {
                 Log.e(TAG, "设备不支持蓝牙")
-                // 扫描方法只返回 ScanResultWrapper 类型，不能返回 BleConnectionState
-                // 直接关闭流，不发送任何数据
                 close()
                 return@channelFlow
             }
-            
+
             if (!currentAdapter.isEnabled) {
                 Log.e(TAG, "蓝牙未开启")
-                // 扫描方法只返回 ScanResultWrapper 类型，不能返回 BleConnectionState
-                // 直接关闭流，不发送任何数据
                 close()
                 return@channelFlow
             }
-    
-            val scanner = currentAdapter.bluetoothLeScanner ?: run {
-                Log.e(TAG, "BluetoothLeScanner not available")
+
+            // 重新获取 scanner，不使用 init 中缓存的引用
+            val currentScanner = currentAdapter.bluetoothLeScanner ?: run {
+                Log.e(TAG, "BluetoothLeScanner not available (可能蓝牙底层异常)")
                 close()
                 return@channelFlow
             }
-    
+
+            // 更新缓存的 adapter 和 scanner
+            bluetoothAdapter = currentAdapter
+            scanner = currentScanner
+            // =================================================================================
+
             isScanning = true
-    
+
             val scanCallback = object : ScanCallback() {
                 override fun onScanResult(callbackType: Int, result: ScanResult) {
                     super.onScanResult(callbackType, result)
-                    
+
                     try {
                         // 不过滤设备，显示所有 BLE 设备
                         val scanResult = ScanResultWrapper(
@@ -106,27 +111,27 @@ class BleScanner @Inject constructor(
                             rssi = result.rssi,
                             scanRecord = result.scanRecord
                         )
-                        
+
                         trySend(scanResult)
                     } catch (e: Exception) {
                         Log.e(TAG, "处理扫描结果失败", e)
                     }
                 }
-    
+
                 override fun onScanFailed(errorCode: Int) {
                     super.onScanFailed(errorCode)
                     Log.e(TAG, "Scan failed: $errorCode")
                     isScanning = false
                 }
             }
-    
+
             val scanSettings = ScanSettings.Builder()
                 .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
                 .build()
-    
+
             try {
                 // 不带过滤器扫描所有设备
-                scanner.startScan(emptyList<ScanFilter>(), scanSettings, scanCallback)
+                currentScanner.startScan(emptyList<ScanFilter>(), scanSettings, scanCallback)
             } catch (e: SecurityException) {
                 Log.e(TAG, "Permission denied", e)
                 close()
@@ -136,10 +141,10 @@ class BleScanner @Inject constructor(
                 close()
                 return@channelFlow
             }
-    
+
             awaitClose {
                 try {
-                    scanner.stopScan(scanCallback)
+                    currentScanner.stopScan(scanCallback)
                 } catch (e: Exception) {
                     Log.e(TAG, "Error stopping scan", e)
                 }
@@ -155,7 +160,9 @@ class BleScanner @Inject constructor(
     fun stopScan() {
         if (isScanning) {
             try {
-                scanner?.stopScan(object : ScanCallback() {})
+                // 使用当前缓存的 scanner，如果为null则尝试重新获取
+                val currentScanner = scanner ?: (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter?.bluetoothLeScanner
+                currentScanner?.stopScan(object : ScanCallback() {})
             } catch (e: Exception) {
                 Log.e(TAG, "Error stopping scan", e)
             }

@@ -486,9 +486,6 @@ class BleManager @Inject constructor(
     @SuppressLint("MissingPermission")
     fun connectDirectly(macAddress: String) {
         try {
-            // ===== 修复BUG3：连接前自动重置BLE状态，解决无法恢复连接问题 =====
-            resetBleState()
-
             deviceMacToConnect = macAddress
 
             val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
@@ -504,6 +501,18 @@ class BleManager @Inject constructor(
             }
 
             bluetoothAdapter = currentAdapter
+
+            // ==================== 核心修复：强制清理旧GATT资源，防止连接僵死 ====================
+            // 问题：蓝牙断开后底层GATT可能未完全释放，导致新连接请求被系统拒绝
+            // 表现：connectGatt()无回调，扫描返回0设备，需强杀APP才能恢复
+            cleanupGatt()
+            // 额外：强制延迟100ms，确保系统蓝牙堆栈完成清理
+            try {
+                Thread.sleep(100)
+            } catch (e: InterruptedException) {
+                // ignore
+            }
+            // =================================================================================
 
             _connectionState.value = BleConnectionState.Connecting
             Log.d(TAG, "直接连接设备：$macAddress")
@@ -712,71 +721,89 @@ class BleManager @Inject constructor(
         Log.d(TAG, "设置目标设备 MAC: $mac")
     }
 
-    private fun cleanupGatt() {
+    // ==================== 核心修复：增强版 cleanupGatt，解决连接僵死问题 ====================
+    // 问题：蓝牙断开后，系统底层GATT可能未完全释放，导致：
+    // 1. connectGatt() 调用后无任何回调（连接僵死）
+    // 2. BluetoothLeScanner 返回空结果（0设备）
+    // 3. 必须强杀APP才能恢复
+    // 修复：增加多层级清理，包括反射清理 + 状态强制重置 + 系统级刷新
+    fun cleanupGatt() {
+        Log.d(TAG, "开始强制清理 BLE 资源...")
+
+        // 第1层：断开并关闭现有GATT
         bluetoothGatt?.let { oldGatt ->
             try {
-                Log.d(TAG, "清理旧 GATT 资源")
-                try { oldGatt.disconnect() } catch (e: Exception) {}
-                try { oldGatt.close() } catch (e: Exception) {}
-                try {
-                    val mBluetoothGattField = oldGatt.javaClass.getDeclaredField("mBluetoothGatt")
-                    mBluetoothGattField.isAccessible = true
-                    val mBluetoothGatt = mBluetoothGattField.get(oldGatt)
-                    if (mBluetoothGatt != null) {
+                oldGatt.disconnect()
+            } catch (e: Exception) {
+                Log.w(TAG, "断开旧GATT失败", e)
+            }
+            try {
+                oldGatt.close()
+            } catch (e: Exception) {
+                Log.w(TAG, "关闭旧GATT失败", e)
+            }
+        }
+
+        // 第2层：反射清理底层 BluetoothGatt 内部资源（防止内存泄漏导致僵死）
+        bluetoothGatt?.let { oldGatt ->
+            try {
+                // 清理 mBluetoothGatt 内部对象
+                val mBluetoothGattField = oldGatt.javaClass.getDeclaredField("mBluetoothGatt")
+                mBluetoothGattField.isAccessible = true
+                val mBluetoothGatt = mBluetoothGattField.get(oldGatt)
+                if (mBluetoothGatt != null) {
+                    try {
                         val closeMethod = mBluetoothGatt.javaClass.getMethod("close")
                         closeMethod.invoke(mBluetoothGatt)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "反射关闭 mBluetoothGatt 失败", e)
                     }
-                } catch (e: Exception) {}
-                try {
-                    val callbackField = oldGatt.javaClass.getDeclaredField("mCallback")
-                    callbackField.isAccessible = true
-                    callbackField.set(oldGatt, null)
-                } catch (e: Exception) {}
+                }
             } catch (e: Exception) {
-                Log.e(TAG, "清理 GATT 异常", e)
+                Log.w(TAG, "反射获取 mBluetoothGatt 失败", e)
             }
-            bluetoothGatt = null
-            alertCharacteristic = null
-            batteryCharacteristic = null
-            customCharacteristic = null
-            disconnectAlarmCharacteristic = null
-            pendingDisconnectAlarmState = null
-            writeQueue.clear()
-            isWriting = false
+
+            try {
+                // 清理回调引用，防止旧回调干扰新连接
+                val callbackField = oldGatt.javaClass.getDeclaredField("mCallback")
+                callbackField.isAccessible = true
+                callbackField.set(oldGatt, null)
+            } catch (e: Exception) {
+                Log.w(TAG, "反射清理 mCallback 失败", e)
+            }
+
+            try {
+                // 清理 mDevice 引用
+                val deviceField = oldGatt.javaClass.getDeclaredField("mDevice")
+                deviceField.isAccessible = true
+                deviceField.set(oldGatt, null)
+            } catch (e: Exception) {
+                Log.w(TAG, "反射清理 mDevice 失败", e)
+            }
         }
-    }
 
-    // ===== 修复BUG3：强制重置BLE状态，用于连接前清理僵尸状态 =====
-    private fun resetBleState() {
-        Log.d(TAG, "强制重置BLE状态...")
-
-        // 1. 断开并清理现有GATT
-        cleanupGatt()
-
-        // 2. 重置连接状态
-        _connectionState.value = BleConnectionState.Disconnected
+        // 第3层：强制重置所有内部状态
+        bluetoothGatt = null
+        bluetoothDevice = null
+        alertCharacteristic = null
+        batteryCharacteristic = null
+        customCharacteristic = null
+        disconnectAlarmCharacteristic = null
+        pendingDisconnectAlarmState = null
+        writeQueue.clear()
+        isWriting = false
         _connectedDeviceName.value = null
         _rssi.value = -100
         _batteryLevel.value = -1
 
-        // 3. 重置双击检测状态
-        lastButtonPressTime = -1L
-        lastDoubleClickTime = 0L
-
-        // 4. 取消RSSI轮询
-        rssiPollingJob?.cancel()
-        rssiPollingJob = null
-
-        // 5. 重新初始化蓝牙适配器
-        try {
-            val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
-            bluetoothAdapter = bluetoothManager?.adapter
-            Log.d(TAG, "BLE状态重置完成，蓝牙适配器=${bluetoothAdapter != null}")
-        } catch (e: Exception) {
-            Log.e(TAG, "BLE状态重置时初始化适配器失败", e)
-            bluetoothAdapter = null
+        // 第4层：如果连接状态不是 Disconnected，强制重置
+        if (_connectionState.value !is BleConnectionState.Disconnected) {
+            _connectionState.value = BleConnectionState.Disconnected
         }
+
+        Log.d(TAG, "BLE 资源强制清理完成")
     }
+    // =================================================================================
 
     suspend fun emitAlarmEvent(reason: String) {
         try {

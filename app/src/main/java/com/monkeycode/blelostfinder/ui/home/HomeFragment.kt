@@ -228,9 +228,13 @@ class HomeFragment : Fragment() {
                 findNavController().navigate(R.id.action_scan)
                 Snackbar.make(binding.root, "请先扫描并绑定防丢器", Snackbar.LENGTH_SHORT).show()
             } else {
-                // ===== 修复BUG3：连接前会自动重置BLE状态（在BleManager.connect/connectDirectly内部） =====
-                connectToDevice()
-                Snackbar.make(binding.root, "正在连接设备...", Snackbar.LENGTH_SHORT).show()
+                // ==================== 核心修复：点击连接按钮时强制重置BLE状态 ====================
+                // 问题：蓝牙断开后底层GATT可能未完全释放，导致 connectGatt() 僵死
+                // 表现：点击连接无反应，搜索页显示0设备，需强杀APP
+                // 修复：每次手动点击连接时，先强制清理所有BLE资源，再发起新连接
+                Log.d("HomeFragment", "点击连接按钮，强制重置BLE状态")
+                viewModel.forceResetBleAndConnect()
+                // =============================================================================
             }
         }
 

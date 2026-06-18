@@ -228,9 +228,9 @@ class HomeFragment : Fragment() {
                 findNavController().navigate(R.id.action_scan)
                 Snackbar.make(binding.root, "请先扫描并绑定防丢器", Snackbar.LENGTH_SHORT).show()
             } else {
-                // ===== 修复BUG3：连接前强制重置BLE状态，解决无法恢复连接问题 =====
-                viewModel.resetBleAndConnect()
-                Snackbar.make(binding.root, "正在重置并连接设备...", Snackbar.LENGTH_SHORT).show()
+                // ===== 修复BUG3：连接前会自动重置BLE状态（在BleManager.connect/connectDirectly内部） =====
+                connectToDevice()
+                Snackbar.make(binding.root, "正在连接设备...", Snackbar.LENGTH_SHORT).show()
             }
         }
 

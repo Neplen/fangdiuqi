@@ -486,6 +486,9 @@ class BleManager @Inject constructor(
     @SuppressLint("MissingPermission")
     fun connectDirectly(macAddress: String) {
         try {
+            // ===== 修复BUG3：连接前自动重置BLE状态，解决无法恢复连接问题 =====
+            resetBleState()
+
             deviceMacToConnect = macAddress
 
             val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
@@ -501,8 +504,6 @@ class BleManager @Inject constructor(
             }
 
             bluetoothAdapter = currentAdapter
-
-            cleanupGatt()
 
             _connectionState.value = BleConnectionState.Connecting
             Log.d(TAG, "直接连接设备：$macAddress")
@@ -745,8 +746,8 @@ class BleManager @Inject constructor(
         }
     }
 
-    // ===== 修复BUG3：强制重置BLE状态，用于HomeFragment连接按钮点击时 =====
-    fun resetBleState() {
+    // ===== 修复BUG3：强制重置BLE状态，用于连接前清理僵尸状态 =====
+    private fun resetBleState() {
         Log.d(TAG, "强制重置BLE状态...")
 
         // 1. 断开并清理现有GATT

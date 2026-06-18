@@ -119,6 +119,10 @@ class BleMonitorService : Service() {
     private var goOutReminderStartTime: Long? = null
     private var goOutReminderStopTime: Long? = null
 
+    // ===== 修复BUG1：出门提醒去重时间戳 =====
+    private var lastGoOutReminderTriggerTime: Long = 0L
+    private val GO_OUT_REMINDER_DEBOUNCE_MS = 5000L
+
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "Service created")
@@ -519,10 +523,15 @@ class BleMonitorService : Service() {
                             return@collect
                         }
 
+                        // ===== 修复BUG2：强制实时获取WiFi连接状态，避免竞态条件 =====
+                        val realtimeWifiConnected = isWifiConnected()
+                        Log.d(TAG, "出门提醒-实时WiFi状态检查：realtimeWifiConnected=$realtimeWifiConnected, cached=$cachedIsWifiConnected")
+
                         // 检查断连报警条件是否也满足——只有蓝牙已断开且条件满足时，才优先触发断连报警
                         val isBluetoothDisconnected = bleManager.connectionState.value is BleConnectionState.Disconnected
-                        val shouldTriggerDisconnectAlarm = isBluetoothDisconnected && shouldTriggerPhoneAlarm()
-                        Log.d(TAG, "出门提醒-断连优先级检查：蓝牙断开=$isBluetoothDisconnected, 断连报警条件=$shouldTriggerDisconnectAlarm")
+                        // 使用实时WiFi状态判断，而不是可能过期的cachedIsWifiConnected
+                        val shouldTriggerDisconnectAlarm = isBluetoothDisconnected && shouldTriggerPhoneAlarmWithRealtimeWifi(realtimeWifiConnected)
+                        Log.d(TAG, "出门提醒-断连优先级检查：蓝牙断开=$isBluetoothDisconnected, 断连报警条件=$shouldTriggerDisconnectAlarm (使用实时WiFi=$realtimeWifiConnected)")
                         if (shouldTriggerDisconnectAlarm) {
                             Log.d(TAG, "断连报警条件也满足，优先触发断连报警，跳过出门提醒")
                             return@collect
@@ -738,6 +747,22 @@ class BleMonitorService : Service() {
         return cachedDisconnectAlarmEnabled
     }
 
+    // ===== 修复BUG2：使用实时WiFi状态判断断连报警条件 =====
+    private fun shouldTriggerPhoneAlarmWithRealtimeWifi(realtimeWifiConnected: Boolean): Boolean {
+        if (cachedWifiDndEnabled && realtimeWifiConnected) {
+            Log.d(TAG, "手机报警判断(实时WiFi)：WiFi勿扰生效，不报警")
+            return false
+        }
+
+        if (cachedScheduleDndEnabled && isInDndTimeRange()) {
+            Log.d(TAG, "手机报警判断(实时WiFi)：定时勿扰生效，不报警")
+            return false
+        }
+
+        Log.d(TAG, "手机报警判断(实时WiFi)：由断连报警开关决定=$cachedDisconnectAlarmEnabled")
+        return cachedDisconnectAlarmEnabled
+    }
+
     private fun handleBleEvent(event: BleEvent) {
         when (event) {
             is BleEvent.ButtonPressed -> {
@@ -824,6 +849,14 @@ class BleMonitorService : Service() {
             Log.d(TAG, "出门提醒已在播放中，跳过重复触发")
             return
         }
+
+        // ===== 修复BUG1：5秒内重复触发去重 =====
+        val now = System.currentTimeMillis()
+        if (now - lastGoOutReminderTriggerTime < GO_OUT_REMINDER_DEBOUNCE_MS) {
+            Log.d(TAG, "出门提醒去重：距离上次触发仅${now - lastGoOutReminderTriggerTime}ms，跳过")
+            return
+        }
+        lastGoOutReminderTriggerTime = now
 
         // 修复：如果断连报警正在播放，不抢占，让断连报警优先
         if (isAlarmPlaying) {

@@ -745,6 +745,38 @@ class BleManager @Inject constructor(
         }
     }
 
+    // ===== 修复BUG3：强制重置BLE状态，用于HomeFragment连接按钮点击时 =====
+    fun resetBleState() {
+        Log.d(TAG, "强制重置BLE状态...")
+
+        // 1. 断开并清理现有GATT
+        cleanupGatt()
+
+        // 2. 重置连接状态
+        _connectionState.value = BleConnectionState.Disconnected
+        _connectedDeviceName.value = null
+        _rssi.value = -100
+        _batteryLevel.value = -1
+
+        // 3. 重置双击检测状态
+        lastButtonPressTime = -1L
+        lastDoubleClickTime = 0L
+
+        // 4. 取消RSSI轮询
+        rssiPollingJob?.cancel()
+        rssiPollingJob = null
+
+        // 5. 重新初始化蓝牙适配器
+        try {
+            val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+            bluetoothAdapter = bluetoothManager?.adapter
+            Log.d(TAG, "BLE状态重置完成，蓝牙适配器=${bluetoothAdapter != null}")
+        } catch (e: Exception) {
+            Log.e(TAG, "BLE状态重置时初始化适配器失败", e)
+            bluetoothAdapter = null
+        }
+    }
+
     suspend fun emitAlarmEvent(reason: String) {
         try {
             _bleEvents.emit(BleEvent.AlarmTriggered(reason))

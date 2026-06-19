@@ -502,17 +502,17 @@ class BleManager @Inject constructor(
 
             bluetoothAdapter = currentAdapter
 
-            // ==================== 核心修复：强制清理旧GATT资源，防止连接僵死 ====================
-            // 问题：蓝牙断开后底层GATT可能未完全释放，导致新连接请求被系统拒绝
-            // 表现：connectGatt()无回调，扫描返回0设备，需强杀APP才能恢复
-            cleanupGatt()
-            // 额外：强制延迟100ms，确保系统蓝牙堆栈完成清理
-            try {
-                Thread.sleep(100)
-            } catch (e: InterruptedException) {
-                // ignore
+            // ==================== 核心修复：防止重复连接 + 强制清理旧GATT ====================
+            // 问题1：连接僵死后重复调用 connectGatt()，系统拒绝新请求
+            // 修复1：如果已经在连接中，跳过重复请求
+            if (_connectionState.value is BleConnectionState.Connecting) {
+                Log.w(TAG, "连接已在进行中，跳过重复连接请求")
+                return
             }
-            // =================================================================================
+            // 问题2：旧GATT未释放，导致新连接被系统忽略
+            // 修复2：每次连接前强制清理所有旧资源
+            cleanupGatt()
+            // =============================================================================
 
             _connectionState.value = BleConnectionState.Connecting
             Log.d(TAG, "直接连接设备：$macAddress")
@@ -721,89 +721,39 @@ class BleManager @Inject constructor(
         Log.d(TAG, "设置目标设备 MAC: $mac")
     }
 
-    // ==================== 核心修复：增强版 cleanupGatt，解决连接僵死问题 ====================
-    // 问题：蓝牙断开后，系统底层GATT可能未完全释放，导致：
-    // 1. connectGatt() 调用后无任何回调（连接僵死）
-    // 2. BluetoothLeScanner 返回空结果（0设备）
-    // 3. 必须强杀APP才能恢复
-    // 修复：增加多层级清理，包括反射清理 + 状态强制重置 + 系统级刷新
-    fun cleanupGatt() {
-        Log.d(TAG, "开始强制清理 BLE 资源...")
-
-        // 第1层：断开并关闭现有GATT
+    private fun cleanupGatt() {
         bluetoothGatt?.let { oldGatt ->
             try {
-                oldGatt.disconnect()
-            } catch (e: Exception) {
-                Log.w(TAG, "断开旧GATT失败", e)
-            }
-            try {
-                oldGatt.close()
-            } catch (e: Exception) {
-                Log.w(TAG, "关闭旧GATT失败", e)
-            }
-        }
-
-        // 第2层：反射清理底层 BluetoothGatt 内部资源（防止内存泄漏导致僵死）
-        bluetoothGatt?.let { oldGatt ->
-            try {
-                // 清理 mBluetoothGatt 内部对象
-                val mBluetoothGattField = oldGatt.javaClass.getDeclaredField("mBluetoothGatt")
-                mBluetoothGattField.isAccessible = true
-                val mBluetoothGatt = mBluetoothGattField.get(oldGatt)
-                if (mBluetoothGatt != null) {
-                    try {
+                Log.d(TAG, "清理旧 GATT 资源")
+                try { oldGatt.disconnect() } catch (e: Exception) {}
+                try { oldGatt.close() } catch (e: Exception) {}
+                try {
+                    val mBluetoothGattField = oldGatt.javaClass.getDeclaredField("mBluetoothGatt")
+                    mBluetoothGattField.isAccessible = true
+                    val mBluetoothGatt = mBluetoothGattField.get(oldGatt)
+                    if (mBluetoothGatt != null) {
                         val closeMethod = mBluetoothGatt.javaClass.getMethod("close")
                         closeMethod.invoke(mBluetoothGatt)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "反射关闭 mBluetoothGatt 失败", e)
                     }
-                }
+                } catch (e: Exception) {}
+                try {
+                    val callbackField = oldGatt.javaClass.getDeclaredField("mCallback")
+                    callbackField.isAccessible = true
+                    callbackField.set(oldGatt, null)
+                } catch (e: Exception) {}
             } catch (e: Exception) {
-                Log.w(TAG, "反射获取 mBluetoothGatt 失败", e)
+                Log.e(TAG, "清理 GATT 异常", e)
             }
-
-            try {
-                // 清理回调引用，防止旧回调干扰新连接
-                val callbackField = oldGatt.javaClass.getDeclaredField("mCallback")
-                callbackField.isAccessible = true
-                callbackField.set(oldGatt, null)
-            } catch (e: Exception) {
-                Log.w(TAG, "反射清理 mCallback 失败", e)
-            }
-
-            try {
-                // 清理 mDevice 引用
-                val deviceField = oldGatt.javaClass.getDeclaredField("mDevice")
-                deviceField.isAccessible = true
-                deviceField.set(oldGatt, null)
-            } catch (e: Exception) {
-                Log.w(TAG, "反射清理 mDevice 失败", e)
-            }
+            bluetoothGatt = null
+            alertCharacteristic = null
+            batteryCharacteristic = null
+            customCharacteristic = null
+            disconnectAlarmCharacteristic = null
+            pendingDisconnectAlarmState = null
+            writeQueue.clear()
+            isWriting = false
         }
-
-        // 第3层：强制重置所有内部状态
-        bluetoothGatt = null
-        bluetoothDevice = null
-        alertCharacteristic = null
-        batteryCharacteristic = null
-        customCharacteristic = null
-        disconnectAlarmCharacteristic = null
-        pendingDisconnectAlarmState = null
-        writeQueue.clear()
-        isWriting = false
-        _connectedDeviceName.value = null
-        _rssi.value = -100
-        _batteryLevel.value = -1
-
-        // 第4层：如果连接状态不是 Disconnected，强制重置
-        if (_connectionState.value !is BleConnectionState.Disconnected) {
-            _connectionState.value = BleConnectionState.Disconnected
-        }
-
-        Log.d(TAG, "BLE 资源强制清理完成")
     }
-    // =================================================================================
 
     suspend fun emitAlarmEvent(reason: String) {
         try {

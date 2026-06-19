@@ -502,17 +502,7 @@ class BleManager @Inject constructor(
 
             bluetoothAdapter = currentAdapter
 
-            // ==================== 核心修复：防止重复连接 + 强制清理旧GATT ====================
-            // 问题1：连接僵死后重复调用 connectGatt()，系统拒绝新请求
-            // 修复1：如果已经在连接中，跳过重复请求
-            if (_connectionState.value is BleConnectionState.Connecting) {
-                Log.w(TAG, "连接已在进行中，跳过重复连接请求")
-                return
-            }
-            // 问题2：旧GATT未释放，导致新连接被系统忽略
-            // 修复2：每次连接前强制清理所有旧资源
             cleanupGatt()
-            // =============================================================================
 
             _connectionState.value = BleConnectionState.Connecting
             Log.d(TAG, "直接连接设备：$macAddress")
@@ -721,7 +711,7 @@ class BleManager @Inject constructor(
         Log.d(TAG, "设置目标设备 MAC: $mac")
     }
 
-    private fun cleanupGatt() {
+    fun cleanupGatt() {
         bluetoothGatt?.let { oldGatt ->
             try {
                 Log.d(TAG, "清理旧 GATT 资源")

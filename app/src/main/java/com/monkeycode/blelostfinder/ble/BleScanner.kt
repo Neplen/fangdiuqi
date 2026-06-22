@@ -14,7 +14,6 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
-import kotlinx.coroutines.flow.receiveAsFlow
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -39,12 +38,11 @@ class BleScanner @Inject constructor(
     private var scanner: android.bluetooth.le.BluetoothLeScanner? = null
     private var isScanning = false
 
-    // ==================== 核心修复：保存当前扫描回调，确保能正确停止扫描 ====================
-    // 问题：stopScan() 使用了新的空 ScanCallback，导致扫描实际上没有停止
-    // 表现：再次扫描时系统冲突，返回0设备
-    // 修复：保存启动扫描时使用的 callback 实例，stopScan() 时复用
     private var currentScanCallback: ScanCallback? = null
-    // =================================================================================
+
+    // ===== 修复：增加扫描作用域，确保cancel时正确清理 =====
+    private var scanJob: kotlinx.coroutines.Job? = null
+    // =====================================================
 
     init {
         initialize()
@@ -67,7 +65,6 @@ class BleScanner @Inject constructor(
     }
 
     fun isBluetoothEnabled(): Boolean {
-        // 每次检查都重新获取蓝牙适配器，确保用户手动开启蓝牙后能正确检测到
         val bluetoothAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
         return bluetoothAdapter != null && bluetoothAdapter.isEnabled
     }
@@ -75,21 +72,24 @@ class BleScanner @Inject constructor(
     @SuppressLint("MissingPermission")
     fun startScan(): Flow<ScanResultWrapper> = channelFlow {
         try {
-            // 重新获取蓝牙适配器，确保用户手动开启蓝牙后能正确检测
+            // ===== 修复：如果已有扫描在进行，先停止 =====
+            if (isScanning) {
+                Log.w(TAG, "已有扫描在进行，先停止旧扫描")
+                stopScan()
+                kotlinx.coroutines.delay(500)
+            }
+            // ==========================================
+
             val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
 
             if (currentAdapter == null) {
                 Log.e(TAG, "设备不支持蓝牙")
-                // 扫描方法只返回 ScanResultWrapper 类型，不能返回 BleConnectionState
-                // 直接关闭流，不发送任何数据
                 close()
                 return@channelFlow
             }
 
             if (!currentAdapter.isEnabled) {
                 Log.e(TAG, "蓝牙未开启")
-                // 扫描方法只返回 ScanResultWrapper 类型，不能返回 BleConnectionState
-                // 直接关闭流，不发送任何数据
                 close()
                 return@channelFlow
             }
@@ -107,7 +107,6 @@ class BleScanner @Inject constructor(
                     super.onScanResult(callbackType, result)
 
                     try {
-                        // 不过滤设备，显示所有 BLE 设备
                         val scanResult = ScanResultWrapper(
                             device = result.device,
                             rssi = result.rssi,
@@ -127,7 +126,6 @@ class BleScanner @Inject constructor(
                 }
             }
 
-            // 保存当前扫描回调，用于正确停止扫描
             currentScanCallback = scanCallback
 
             val scanSettings = ScanSettings.Builder()
@@ -135,14 +133,15 @@ class BleScanner @Inject constructor(
                 .build()
 
             try {
-                // 不带过滤器扫描所有设备
                 scanner.startScan(emptyList<ScanFilter>(), scanSettings, scanCallback)
             } catch (e: SecurityException) {
                 Log.e(TAG, "Permission denied", e)
+                isScanning = false
                 close()
                 return@channelFlow
             } catch (e: Exception) {
                 Log.e(TAG, "启动扫描失败", e)
+                isScanning = false
                 close()
                 return@channelFlow
             }
@@ -154,11 +153,11 @@ class BleScanner @Inject constructor(
                     Log.e(TAG, "Error stopping scan", e)
                 }
                 isScanning = false
-                // 清空保存的回调
                 currentScanCallback = null
             }
         } catch (e: Exception) {
             Log.e(TAG, "startScan 异常", e)
+            isScanning = false
             close()
         }
     }
@@ -167,13 +166,9 @@ class BleScanner @Inject constructor(
     fun stopScan() {
         if (isScanning) {
             try {
-                // ==================== 核心修复：使用保存的 callback 停止扫描 ====================
-                // 问题：之前使用新的空 ScanCallback，Android 无法匹配到正在运行的扫描
-                // 修复：使用 currentScanCallback（即启动扫描时的同一个实例）
                 currentScanCallback?.let { callback ->
                     scanner?.stopScan(callback)
                 }
-                // =============================================================================
             } catch (e: Exception) {
                 Log.e(TAG, "Error stopping scan", e)
             }

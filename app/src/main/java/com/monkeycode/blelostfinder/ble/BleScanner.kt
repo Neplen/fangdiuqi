@@ -14,7 +14,6 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
-import kotlinx.coroutines.flow.receiveAsFlow
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -46,8 +45,6 @@ class BleScanner @Inject constructor(
     private var currentScanCallback: ScanCallback? = null
     // =================================================================================
 
-    private var scanJob: kotlinx.coroutines.Job? = null
-
     init {
         initialize()
     }
@@ -76,28 +73,18 @@ class BleScanner @Inject constructor(
 
     @SuppressLint("MissingPermission")
     fun startScan(): Flow<ScanResultWrapper> = channelFlow {
-        // 如果有正在进行的扫描，先停止并等待系统释放资源
-        if (isScanning) {
-            stopScan()
-            kotlinx.coroutines.delay(500)
-        }
-
         try {
             // 重新获取蓝牙适配器，确保用户手动开启蓝牙后能正确检测
             val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
 
             if (currentAdapter == null) {
                 Log.e(TAG, "设备不支持蓝牙")
-                // 扫描方法只返回 ScanResultWrapper 类型，不能返回 BleConnectionState
-                // 直接关闭流，不发送任何数据
                 close()
                 return@channelFlow
             }
 
             if (!currentAdapter.isEnabled) {
                 Log.e(TAG, "蓝牙未开启")
-                // 扫描方法只返回 ScanResultWrapper 类型，不能返回 BleConnectionState
-                // 直接关闭流，不发送任何数据
                 close()
                 return@channelFlow
             }
@@ -107,6 +94,25 @@ class BleScanner @Inject constructor(
                 close()
                 return@channelFlow
             }
+
+            // ==================== 核心修复：启动扫描前强制停止旧扫描 ====================
+            // 问题：如果之前有扫描未正确停止，新扫描会冲突导致0设备
+            // 修复：先停止旧扫描，等待300ms让系统释放资源，再启动新扫描
+            if (isScanning) {
+                try {
+                    currentScanCallback?.let { callback ->
+                        scanner.stopScan(callback)
+                    }
+                    Log.d(TAG, "停止旧扫描，等待资源释放...")
+                } catch (e: Exception) {
+                    Log.e(TAG, "停止旧扫描失败", e)
+                }
+                // 延迟300ms确保系统蓝牙堆栈完成清理
+                kotlinx.coroutines.delay(300)
+                isScanning = false
+                currentScanCallback = null
+            }
+            // ========================================================================
 
             isScanning = true
 
@@ -145,15 +151,12 @@ class BleScanner @Inject constructor(
             try {
                 // 不带过滤器扫描所有设备
                 scanner.startScan(emptyList<ScanFilter>(), scanSettings, scanCallback)
-                Log.d(TAG, "扫描已启动")
             } catch (e: SecurityException) {
                 Log.e(TAG, "Permission denied", e)
-                isScanning = false
                 close()
                 return@channelFlow
             } catch (e: Exception) {
                 Log.e(TAG, "启动扫描失败", e)
-                isScanning = false
                 close()
                 return@channelFlow
             }
@@ -161,7 +164,6 @@ class BleScanner @Inject constructor(
             awaitClose {
                 try {
                     scanner.stopScan(scanCallback)
-                    Log.d(TAG, "扫描已停止")
                 } catch (e: Exception) {
                     Log.e(TAG, "Error stopping scan", e)
                 }
@@ -182,10 +184,12 @@ class BleScanner @Inject constructor(
                 // ==================== 核心修复：使用保存的 callback 停止扫描 ====================
                 // 问题：之前使用新的空 ScanCallback，Android 无法匹配到正在运行的扫描
                 // 修复：使用 currentScanCallback（即启动扫描时的同一个实例）
+                // 同时重新获取最新适配器实例，确保能正确停止
+                val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
+                val currentScanner = currentAdapter?.bluetoothLeScanner
+
                 currentScanCallback?.let { callback ->
-                    // 重新获取scanner，确保使用最新的适配器
-                    val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
-                    currentAdapter?.bluetoothLeScanner?.stopScan(callback)
+                    currentScanner?.stopScan(callback)
                 }
                 // =============================================================================
             } catch (e: Exception) {

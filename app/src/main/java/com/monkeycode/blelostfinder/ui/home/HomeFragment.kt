@@ -228,12 +228,8 @@ class HomeFragment : Fragment() {
                 findNavController().navigate(R.id.action_scan)
                 Snackbar.make(binding.root, "请先扫描并绑定防丢器", Snackbar.LENGTH_SHORT).show()
             } else {
-                // ==================== 核心修复：点击连接时强制重置BLE并连接 ====================
-                // 问题：蓝牙僵死后点击连接无反应，因为旧GATT未释放
-                // 修复：调用 forceResetBleAndConnect() 先清理再连接
-                viewModel.forceResetBleAndConnect()
+                connectToDevice()
                 Snackbar.make(binding.root, "正在连接设备...", Snackbar.LENGTH_SHORT).show()
-                // =========================================================================
             }
         }
 

@@ -35,7 +35,7 @@ class BleManager @Inject constructor(
         private var lastDoubleClickTime = 0L
         private const val DOUBLE_CLICK_COOLDOWN = 800L
 
-        // 重连冷却时间：断开连接后至少等待5秒才允许重连
+        // 自动重连冷却时间：断开连接后至少等待5秒才允许自动重连
         private const val RECONNECT_COOLDOWN_MS = 5000L
 
         // ===== 修改：删除硬编码的 I_DEVICE_NAME 和 I_DEVICE_MAC =====
@@ -77,9 +77,12 @@ class BleManager @Inject constructor(
 
     private var deviceMacToConnect: String? = null
 
-    // 防重复连接锁 + 重连冷却
-    private var isConnecting = false
-    private var lastDisconnectTime = 0L
+    // 自动重连冷却状态
+    private var isReconnectCooldown = false
+    private val reconnectCooldownRunnable = Runnable {
+        isReconnectCooldown = false
+        Log.d(TAG, "自动重连冷却结束")
+    }
 
     private val _connectionState = MutableStateFlow<BleConnectionState>(BleConnectionState.Disconnected)
     val connectionState: StateFlow<BleConnectionState> = _connectionState.asStateFlow()
@@ -173,12 +176,15 @@ class BleManager @Inject constructor(
 
     private val bleCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            Log.d(TAG, "Connection state changed: $status, newState=$newState")
+            Log.d(TAG, "Connection state changed: status=$status, newState=$newState")
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
+                    // 连接成功，清除冷却
+                    isReconnectCooldown = false
+                    mainHandler.removeCallbacks(reconnectCooldownRunnable)
+
                     _connectionState.value = BleConnectionState.Connected
                     bluetoothGatt = gatt
-                    isConnecting = false  // 连接成功，释放锁
                     // ===== 修改：连接成功后从 BluetoothDevice 获取名称 =====
                     _connectedDeviceName.value = gatt.device.name ?: "未知设备"
                     gatt.discoverServices()
@@ -187,13 +193,10 @@ class BleManager @Inject constructor(
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.d(TAG, "设备已断开，准备自动重连...")
                     _connectionState.value = BleConnectionState.Disconnected
-                    lastDisconnectTime = System.currentTimeMillis()
-                    isConnecting = false  // 释放连接锁
 
-                    // 安全的GATT清理：只调用标准API，不做反射
                     try {
                         gatt.close()
-                        Log.d(TAG, "GATT已关闭")
+                        Log.d(TAG, "GATT已关闭，释放原生资源")
                     } catch (e: Exception) {
                         Log.e(TAG, "关闭GATT异常", e)
                     }
@@ -223,20 +226,19 @@ class BleManager @Inject constructor(
                         }
                     }
 
-                    // 带冷却的重连
                     deviceMacToConnect?.let { mac ->
-                        val timeSinceDisconnect = System.currentTimeMillis() - lastDisconnectTime
-                        val delayMs = if (timeSinceDisconnect < RECONNECT_COOLDOWN_MS) {
-                            RECONNECT_COOLDOWN_MS - timeSinceDisconnect
-                        } else {
-                            0L
-                        }
+                        // 启动冷却计时器
+                        isReconnectCooldown = true
+                        mainHandler.postDelayed(reconnectCooldownRunnable, RECONNECT_COOLDOWN_MS)
+
                         mainHandler.postDelayed({
-                            if (deviceMacToConnect == mac && _connectionState.value is BleConnectionState.Disconnected) {
+                            try {
                                 Log.d(TAG, "开始自动重连设备：$mac")
                                 scheduleReconnect(mac)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "自动重连失败", e)
                             }
-                        }, delayMs)
+                        }, RECONNECT_COOLDOWN_MS)
                     }
                 }
             }
@@ -501,45 +503,30 @@ class BleManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     fun connectDirectly(macAddress: String) {
-        // 防重复连接：如果正在连接中，直接返回
-        if (isConnecting) {
-            Log.d(TAG, "连接请求被忽略：已有连接在进行中")
-            return
-        }
-
-        // 如果已连接该设备，不重复连接
-        if (_connectionState.value is BleConnectionState.Connected &&
-            bluetoothDevice?.address == macAddress) {
-            Log.d(TAG, "设备已连接，跳过重复连接")
-            return
-        }
-
         try {
-            isConnecting = true
             deviceMacToConnect = macAddress
 
             val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
 
             if (currentAdapter == null) {
                 Log.e(TAG, "设备不支持蓝牙")
-                isConnecting = false
                 return
             }
 
             if (!currentAdapter.isEnabled) {
                 Log.w(TAG, "蓝牙未开启，等待开启")
-                isConnecting = false
+                return
+            }
+
+            // 如果已经连接了同一个设备，不再重复连接
+            if (bluetoothGatt != null && _connectionState.value is BleConnectionState.Connected) {
+                Log.d(TAG, "设备已连接，跳过重复连接")
                 return
             }
 
             bluetoothAdapter = currentAdapter
 
-            // 安全的清理：只调用标准API
-            bluetoothGatt?.let { oldGatt ->
-                try { oldGatt.disconnect() } catch (e: Exception) { }
-                try { oldGatt.close() } catch (e: Exception) { }
-                bluetoothGatt = null
-            }
+            cleanupGatt()
 
             _connectionState.value = BleConnectionState.Connecting
             Log.d(TAG, "直接连接设备：$macAddress")
@@ -548,24 +535,20 @@ class BleManager @Inject constructor(
                 currentAdapter.getRemoteDevice(macAddress)
             } catch (e: IllegalArgumentException) {
                 Log.e(TAG, "无效的 MAC 地址：$macAddress", e)
-                isConnecting = false
                 return
             } catch (e: SecurityException) {
                 Log.e(TAG, "缺少蓝牙连接权限", e)
-                isConnecting = false
                 return
             }
 
             try {
-                bluetoothGatt = bluetoothDevice?.connectGatt(context, false, bleCallback)
+                bluetoothDevice?.connectGatt(context, false, bleCallback)
                 Log.d(TAG, "GATT 直接连接已发起")
             } catch (e: Exception) {
                 Log.e(TAG, "直接连接 GATT 失败", e)
-                isConnecting = false
             }
         } catch (e: Exception) {
             Log.e(TAG, "connectDirectly 方法异常", e)
-            isConnecting = false
         }
     }
 
@@ -704,23 +687,23 @@ class BleManager @Inject constructor(
     }
 
     private fun scheduleReconnect(mac: String) {
+        // 冷却检查：如果正在冷却中，跳过本次重连
+        if (isReconnectCooldown) {
+            Log.d(TAG, "自动重连冷却中，跳过本次重连")
+            return
+        }
+
         val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE)
             as? BluetoothManager)?.adapter
 
         if (currentAdapter != null && currentAdapter.isEnabled) {
-            if (isConnecting) {
-                Log.d(TAG, "自动重连被跳过：已有连接在进行中")
-                return
-            }
             try {
                 bluetoothAdapter = currentAdapter
                 val device = currentAdapter.getRemoteDevice(mac)
-                bluetoothGatt = device.connectGatt(context, false, bleCallback)
-                isConnecting = true
+                device.connectGatt(context, false, bleCallback)
                 Log.d(TAG, "自动重连 GATT 已发起")
             } catch (e: Exception) {
                 Log.e(TAG, "自动重连失败", e)
-                isConnecting = false
             }
         } else {
             Log.e(TAG, "蓝牙未开启，等待开启后重连")
@@ -733,26 +716,9 @@ class BleManager @Inject constructor(
         val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
 
         if (macAddress != null && currentAdapter != null && currentAdapter.isEnabled) {
-            // 检查冷却时间
-            val timeSinceDisconnect = System.currentTimeMillis() - lastDisconnectTime
-            if (timeSinceDisconnect < RECONNECT_COOLDOWN_MS && lastDisconnectTime > 0) {
-                Log.d(TAG, "重连冷却中，剩余 ${RECONNECT_COOLDOWN_MS - timeSinceDisconnect}ms，跳过")
-                return
-            }
-
-            if (isConnecting) {
-                Log.d(TAG, "reconnectIfDisconnected 被跳过：已有连接在进行中")
-                return
-            }
-
             try {
                 bluetoothAdapter = currentAdapter
-                // 安全的清理：只调用标准API
-                bluetoothGatt?.let { oldGatt ->
-                    try { oldGatt.disconnect() } catch (e: Exception) { }
-                    try { oldGatt.close() } catch (e: Exception) { }
-                    bluetoothGatt = null
-                }
+                cleanupGatt()
                 connectDirectly(macAddress)
                 Log.d(TAG, "蓝牙重连已发起：$macAddress")
             } catch (e: Exception) {
@@ -776,12 +742,11 @@ class BleManager @Inject constructor(
     }
 
     fun cleanupGatt() {
-        isConnecting = false
         bluetoothGatt?.let { oldGatt ->
             try {
                 Log.d(TAG, "清理旧 GATT 资源")
-                try { oldGatt.disconnect() } catch (e: Exception) { }
-                try { oldGatt.close() } catch (e: Exception) { }
+                try { oldGatt.disconnect() } catch (e: Exception) {}
+                try { oldGatt.close() } catch (e: Exception) {}
             } catch (e: Exception) {
                 Log.e(TAG, "清理 GATT 异常", e)
             }

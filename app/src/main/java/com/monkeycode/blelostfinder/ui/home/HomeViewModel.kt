@@ -102,34 +102,6 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    // ==================== 核心修复：强制重置BLE并连接 ====================
-    // 问题：蓝牙僵死后，旧GATT未释放导致新连接被系统忽略
-    // 修复：先调用 cleanupGatt() 强制清理所有资源，再发起新连接
-    // 用途：用户手动点击"连接"按钮时调用，确保能恢复僵死状态
-    fun forceResetBleAndConnect() {
-        viewModelScope.launch {
-            try {
-                val savedMac = settingsManager.deviceMac.firstOrNull()
-                if (!savedMac.isNullOrEmpty()) {
-                    Log.d("HomeViewModel", "强制重置BLE并连接: MAC=$savedMac")
-                    // 第1步：强制清理所有BLE资源（断开、关闭、反射清理、状态重置）
-                    bleManager.cleanupGatt()
-                    // 第2步：延迟100ms确保系统蓝牙堆栈完成清理
-                    kotlinx.coroutines.delay(100)
-                    // 第3步：设置目标MAC并发起新连接
-                    bleManager.setDeviceMacToConnect(savedMac)
-                    bleManager.connectDirectly(savedMac)
-                    Log.d("HomeViewModel", "强制重置后连接已发起")
-                } else {
-                    Log.d("HomeViewModel", "未绑定设备，无法连接")
-                }
-            } catch (e: Exception) {
-                Log.e("HomeViewModel", "强制重置并连接失败：${e.message}", e)
-            }
-        }
-    }
-    // =================================================================
-
     private fun loadDevice(macAddress: String) {
         viewModelScope.launch {
             deviceRepository.getDeviceByMacFlow(macAddress).collect { device: BleDevice? ->

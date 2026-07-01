@@ -14,6 +14,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -38,13 +39,6 @@ class BleScanner @Inject constructor(
     private var scanner: android.bluetooth.le.BluetoothLeScanner? = null
     private var isScanning = false
 
-    // ==================== 核心修复：保存当前扫描回调，确保能正确停止扫描 ====================
-    // 问题：stopScan() 使用了新的空 ScanCallback，导致扫描实际上没有停止
-    // 表现：再次扫描时系统冲突，返回0设备
-    // 修复：保存启动扫描时使用的 callback 实例，stopScan() 时复用
-    private var currentScanCallback: ScanCallback? = null
-    // =================================================================================
-
     init {
         initialize()
     }
@@ -54,7 +48,7 @@ class BleScanner @Inject constructor(
             val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
             bluetoothAdapter = bluetoothManager?.adapter
             scanner = bluetoothAdapter?.bluetoothLeScanner
-
+            
             if (bluetoothAdapter == null) {
                 Log.e(TAG, "设备不支持蓝牙")
             } else {
@@ -76,50 +70,35 @@ class BleScanner @Inject constructor(
         try {
             // 重新获取蓝牙适配器，确保用户手动开启蓝牙后能正确检测
             val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
-
+            
             if (currentAdapter == null) {
                 Log.e(TAG, "设备不支持蓝牙")
+                // 扫描方法只返回 ScanResultWrapper 类型，不能返回 BleConnectionState
+                // 直接关闭流，不发送任何数据
                 close()
                 return@channelFlow
             }
-
+            
             if (!currentAdapter.isEnabled) {
                 Log.e(TAG, "蓝牙未开启")
+                // 扫描方法只返回 ScanResultWrapper 类型，不能返回 BleConnectionState
+                // 直接关闭流，不发送任何数据
                 close()
                 return@channelFlow
             }
-
+    
             val scanner = currentAdapter.bluetoothLeScanner ?: run {
                 Log.e(TAG, "BluetoothLeScanner not available")
                 close()
                 return@channelFlow
             }
-
-            // ==================== 核心修复：启动扫描前强制停止旧扫描 ====================
-            // 问题：如果之前有扫描未正确停止，新扫描会冲突导致0设备
-            // 修复：先停止旧扫描，等待300ms让系统释放资源，再启动新扫描
-            if (isScanning) {
-                try {
-                    currentScanCallback?.let { callback ->
-                        scanner.stopScan(callback)
-                    }
-                    Log.d(TAG, "停止旧扫描，等待资源释放...")
-                } catch (e: Exception) {
-                    Log.e(TAG, "停止旧扫描失败", e)
-                }
-                // 延迟300ms确保系统蓝牙堆栈完成清理
-                kotlinx.coroutines.delay(300)
-                isScanning = false
-                currentScanCallback = null
-            }
-            // ========================================================================
-
+    
             isScanning = true
-
+    
             val scanCallback = object : ScanCallback() {
                 override fun onScanResult(callbackType: Int, result: ScanResult) {
                     super.onScanResult(callbackType, result)
-
+                    
                     try {
                         // 不过滤设备，显示所有 BLE 设备
                         val scanResult = ScanResultWrapper(
@@ -127,27 +106,24 @@ class BleScanner @Inject constructor(
                             rssi = result.rssi,
                             scanRecord = result.scanRecord
                         )
-
+                        
                         trySend(scanResult)
                     } catch (e: Exception) {
                         Log.e(TAG, "处理扫描结果失败", e)
                     }
                 }
-
+    
                 override fun onScanFailed(errorCode: Int) {
                     super.onScanFailed(errorCode)
                     Log.e(TAG, "Scan failed: $errorCode")
                     isScanning = false
                 }
             }
-
-            // 保存当前扫描回调，用于正确停止扫描
-            currentScanCallback = scanCallback
-
+    
             val scanSettings = ScanSettings.Builder()
                 .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
                 .build()
-
+    
             try {
                 // 不带过滤器扫描所有设备
                 scanner.startScan(emptyList<ScanFilter>(), scanSettings, scanCallback)
@@ -160,7 +136,7 @@ class BleScanner @Inject constructor(
                 close()
                 return@channelFlow
             }
-
+    
             awaitClose {
                 try {
                     scanner.stopScan(scanCallback)
@@ -168,8 +144,6 @@ class BleScanner @Inject constructor(
                     Log.e(TAG, "Error stopping scan", e)
                 }
                 isScanning = false
-                // 清空保存的回调
-                currentScanCallback = null
             }
         } catch (e: Exception) {
             Log.e(TAG, "startScan 异常", e)
@@ -181,22 +155,11 @@ class BleScanner @Inject constructor(
     fun stopScan() {
         if (isScanning) {
             try {
-                // ==================== 核心修复：使用保存的 callback 停止扫描 ====================
-                // 问题：之前使用新的空 ScanCallback，Android 无法匹配到正在运行的扫描
-                // 修复：使用 currentScanCallback（即启动扫描时的同一个实例）
-                // 同时重新获取最新适配器实例，确保能正确停止
-                val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
-                val currentScanner = currentAdapter?.bluetoothLeScanner
-
-                currentScanCallback?.let { callback ->
-                    currentScanner?.stopScan(callback)
-                }
-                // =============================================================================
+                scanner?.stopScan(object : ScanCallback() {})
             } catch (e: Exception) {
                 Log.e(TAG, "Error stopping scan", e)
             }
             isScanning = false
-            currentScanCallback = null
             Log.d(TAG, "Scan stopped")
         }
     }

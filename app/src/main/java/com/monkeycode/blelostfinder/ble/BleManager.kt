@@ -35,9 +35,6 @@ class BleManager @Inject constructor(
         private var lastDoubleClickTime = 0L
         private const val DOUBLE_CLICK_COOLDOWN = 800L
 
-        // 自动重连冷却时间：断开连接后至少等待5秒才允许自动重连
-        private const val RECONNECT_COOLDOWN_MS = 5000L
-
         // ===== 修改：删除硬编码的 I_DEVICE_NAME 和 I_DEVICE_MAC =====
         // 设备信息改为从 DataStore/Room 动态读取，支持更换防丢器
 
@@ -77,13 +74,6 @@ class BleManager @Inject constructor(
 
     private var deviceMacToConnect: String? = null
 
-    // 自动重连冷却状态
-    private var isReconnectCooldown = false
-    private val reconnectCooldownRunnable = Runnable {
-        isReconnectCooldown = false
-        Log.d(TAG, "自动重连冷却结束")
-    }
-
     private val _connectionState = MutableStateFlow<BleConnectionState>(BleConnectionState.Disconnected)
     val connectionState: StateFlow<BleConnectionState> = _connectionState.asStateFlow()
 
@@ -103,6 +93,12 @@ class BleManager @Inject constructor(
     private val managerScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    // ===== 核心修复：添加连接状态标志，防止并发连接请求导致 status=133 =====
+    // 注意：此标志只用于 reconnectIfDisconnected() 的防重入保护
+    // connectDirectly() 不受此限制，确保用户手动连接始终畅通
+    @Volatile
+    private var isConnecting = false
 
     fun shouldEnableDeviceDisconnectAlarm(
         isWifiDndEnabled: Boolean,
@@ -176,13 +172,17 @@ class BleManager @Inject constructor(
 
     private val bleCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            Log.d(TAG, "Connection state changed: status=$status, newState=$newState")
+            Log.d(TAG, "Connection state changed: $status, newState=$newState")
+
+            // ===== 核心修复：无论成功失败，连接流程结束，重置 isConnecting 标志 =====
+            // 但注意：如果 newState==CONNECTING，说明是另一个连接请求，不要重置
+            if (newState != BluetoothProfile.STATE_CONNECTING) {
+                isConnecting = false
+                Log.d(TAG, "连接流程结束，重置 isConnecting=false")
+            }
+
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
-                    // 连接成功，清除冷却
-                    isReconnectCooldown = false
-                    mainHandler.removeCallbacks(reconnectCooldownRunnable)
-
                     _connectionState.value = BleConnectionState.Connected
                     bluetoothGatt = gatt
                     // ===== 修改：连接成功后从 BluetoothDevice 获取名称 =====
@@ -227,10 +227,6 @@ class BleManager @Inject constructor(
                     }
 
                     deviceMacToConnect?.let { mac ->
-                        // 启动冷却计时器
-                        isReconnectCooldown = true
-                        mainHandler.postDelayed(reconnectCooldownRunnable, RECONNECT_COOLDOWN_MS)
-
                         mainHandler.postDelayed({
                             try {
                                 Log.d(TAG, "开始自动重连设备：$mac")
@@ -238,7 +234,7 @@ class BleManager @Inject constructor(
                             } catch (e: Exception) {
                                 Log.e(TAG, "自动重连失败", e)
                             }
-                        }, RECONNECT_COOLDOWN_MS)
+                        }, 3000)
                     }
                 }
             }
@@ -518,12 +514,6 @@ class BleManager @Inject constructor(
                 return
             }
 
-            // 如果已经连接了同一个设备，不再重复连接
-            if (bluetoothGatt != null && _connectionState.value is BleConnectionState.Connected) {
-                Log.d(TAG, "设备已连接，跳过重复连接")
-                return
-            }
-
             bluetoothAdapter = currentAdapter
 
             cleanupGatt()
@@ -687,12 +677,6 @@ class BleManager @Inject constructor(
     }
 
     private fun scheduleReconnect(mac: String) {
-        // 冷却检查：如果正在冷却中，跳过本次重连
-        if (isReconnectCooldown) {
-            Log.d(TAG, "自动重连冷却中，跳过本次重连")
-            return
-        }
-
         val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE)
             as? BluetoothManager)?.adapter
 
@@ -712,17 +696,32 @@ class BleManager @Inject constructor(
 
     // ===== 修改：reconnectIfDisconnected 不再使用硬编码 MAC，改为从 DataStore 读取 =====
     // 由 BleMonitorService 或 HomeViewModel 传入实际保存的 MAC
+    // ===== 核心修复：增加防并发保护，避免多个路径同时发起连接导致 status=133 =====
     fun reconnectIfDisconnected(macAddress: String? = deviceMacToConnect) {
+        // 如果已经在连接中，跳过（避免并发）
+        if (isConnecting) {
+            Log.d(TAG, "已有连接在进行中，跳过重连")
+            return
+        }
+
+        // 如果已经连接，跳过
+        if (_connectionState.value is BleConnectionState.Connected) {
+            Log.d(TAG, "设备已连接，跳过重连")
+            return
+        }
+
         val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
 
         if (macAddress != null && currentAdapter != null && currentAdapter.isEnabled) {
             try {
                 bluetoothAdapter = currentAdapter
                 cleanupGatt()
+                isConnecting = true
                 connectDirectly(macAddress)
                 Log.d(TAG, "蓝牙重连已发起：$macAddress")
             } catch (e: Exception) {
                 Log.e(TAG, "蓝牙重连失败", e)
+                isConnecting = false
             }
         } else {
             if (macAddress == null) {
@@ -741,12 +740,26 @@ class BleManager @Inject constructor(
         Log.d(TAG, "设置目标设备 MAC: $mac")
     }
 
-    fun cleanupGatt() {
+    private fun cleanupGatt() {
         bluetoothGatt?.let { oldGatt ->
             try {
                 Log.d(TAG, "清理旧 GATT 资源")
                 try { oldGatt.disconnect() } catch (e: Exception) {}
                 try { oldGatt.close() } catch (e: Exception) {}
+                try {
+                    val mBluetoothGattField = oldGatt.javaClass.getDeclaredField("mBluetoothGatt")
+                    mBluetoothGattField.isAccessible = true
+                    val mBluetoothGatt = mBluetoothGattField.get(oldGatt)
+                    if (mBluetoothGatt != null) {
+                        val closeMethod = mBluetoothGatt.javaClass.getMethod("close")
+                        closeMethod.invoke(mBluetoothGatt)
+                    }
+                } catch (e: Exception) {}
+                try {
+                    val callbackField = oldGatt.javaClass.getDeclaredField("mCallback")
+                    callbackField.isAccessible = true
+                    callbackField.set(oldGatt, null)
+                } catch (e: Exception) {}
             } catch (e: Exception) {
                 Log.e(TAG, "清理 GATT 异常", e)
             }

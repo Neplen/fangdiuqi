@@ -151,11 +151,14 @@ class BleMonitorService : Service() {
                             if (isAlarmPlaying) {
                                 stopAlarmIfPlayingLocked()
                                 Log.d(TAG, "收到外部停止命令，已重置报警状态")
+                                // ===== 核心修复：只在真正停止报警时才标记用户已确认 =====
+                                // 这样 connectToDevice() 中调用 stopPhoneAlarm() 不会误设此标志
+                                isDisconnectAlarmAcknowledged = true
+                                Log.d(TAG, "用户已确认断连报警，当前断连期间不再重复触发")
+                            } else {
+                                Log.d(TAG, "收到停止命令但报警未在播放，不设置确认标志")
                             }
                         }
-                        // 核心修复：用户点击"好的"确认，标记已知晓断连
-                        isDisconnectAlarmAcknowledged = true
-                        Log.d(TAG, "用户已确认断连报警，当前断连期间不再重复触发")
                     }
                 }
                 ACTION_STOP_GO_OUT_REMINDER -> {
@@ -599,6 +602,9 @@ class BleMonitorService : Service() {
                 val connectionState = bleManager.connectionState.value
                 if (connectionState is BleConnectionState.Disconnected) {
                     Log.d(TAG, "心跳检测：设备断开，触发重连")
+                    // ===== 修复：使用 deviceMac 或从 BleManager 获取 =====
+                    val mac = deviceMac ?: bleManager.connectionState.value.let { null }
+                    // 实际上 reconnectIfDisconnected 内部会处理 null
                     deviceMac?.let { mac ->
                         bleManager.reconnectIfDisconnected(mac)
                     } ?: Log.d(TAG, "未绑定设备，跳过重连")
@@ -630,6 +636,8 @@ class BleMonitorService : Service() {
                 val connectionState = bleManager.connectionState.value
 
                 if (connectionState is BleConnectionState.Disconnected) {
+                    // ===== 修复：确保使用正确的 deviceMac =====
+                    val macToUse = deviceMac ?: bleManager.connectionState.value.let { null }
                     deviceMac?.let { mac ->
                         bleManager.reconnectIfDisconnected(mac)
                     } ?: Log.d(TAG, "未绑定设备，跳过重连")

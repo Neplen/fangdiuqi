@@ -119,6 +119,10 @@ class BleMonitorService : Service() {
     private var goOutReminderStartTime: Long? = null
     private var goOutReminderStopTime: Long? = null
 
+    // ===== 核心修复：Service 层重连频率控制，避免与 BleManager 断开回调并发 =====
+    private var lastReconnectAttemptTime: Long = 0L
+    private val RECONNECT_COOLDOWN_MS = 4000L
+
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "Service created")
@@ -151,13 +155,15 @@ class BleMonitorService : Service() {
                             if (isAlarmPlaying) {
                                 stopAlarmIfPlayingLocked()
                                 Log.d(TAG, "收到外部停止命令，已重置报警状态")
-                                // ===== 核心修复：只在真正停止报警时才标记用户已确认 =====
-                                // 这样 connectToDevice() 中调用 stopPhoneAlarm() 不会误设此标志
-                                isDisconnectAlarmAcknowledged = true
-                                Log.d(TAG, "用户已确认断连报警，当前断连期间不再重复触发")
-                            } else {
-                                Log.d(TAG, "收到停止命令但报警未在播放，不设置确认标志")
                             }
+                        }
+                        // ===== 核心修复：只在报警确实在播放时，才标记用户已确认 =====
+                        // 避免 HomeFragment.onResume() 自动重连时误触确认
+                        if (isAlarmPlaying || alarmSoundManager.isPlaying()) {
+                            isDisconnectAlarmAcknowledged = true
+                            Log.d(TAG, "用户已确认断连报警，当前断连期间不再重复触发")
+                        } else {
+                            Log.d(TAG, "报警未在播放，不标记断连确认（防止误触）")
                         }
                     }
                 }
@@ -602,9 +608,6 @@ class BleMonitorService : Service() {
                 val connectionState = bleManager.connectionState.value
                 if (connectionState is BleConnectionState.Disconnected) {
                     Log.d(TAG, "心跳检测：设备断开，触发重连")
-                    // ===== 修复：使用 deviceMac 或从 BleManager 获取 =====
-                    val mac = deviceMac ?: bleManager.connectionState.value.let { null }
-                    // 实际上 reconnectIfDisconnected 内部会处理 null
                     deviceMac?.let { mac ->
                         bleManager.reconnectIfDisconnected(mac)
                     } ?: Log.d(TAG, "未绑定设备，跳过重连")
@@ -636,8 +639,14 @@ class BleMonitorService : Service() {
                 val connectionState = bleManager.connectionState.value
 
                 if (connectionState is BleConnectionState.Disconnected) {
-                    // ===== 修复：确保使用正确的 deviceMac =====
-                    val macToUse = deviceMac ?: bleManager.connectionState.value.let { null }
+                    // ===== 核心修复：Service 层控制重连冷却，避免与 BleManager 断开回调并发 =====
+                    val now = System.currentTimeMillis()
+                    if (now - lastReconnectAttemptTime < RECONNECT_COOLDOWN_MS) {
+                        // 冷却期内，跳过本次重连
+                        continue
+                    }
+                    lastReconnectAttemptTime = now
+
                     deviceMac?.let { mac ->
                         bleManager.reconnectIfDisconnected(mac)
                     } ?: Log.d(TAG, "未绑定设备，跳过重连")

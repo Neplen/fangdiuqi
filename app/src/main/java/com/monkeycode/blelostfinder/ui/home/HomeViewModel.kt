@@ -204,15 +204,13 @@ class HomeViewModel @Inject constructor(
             alarmSoundManager.stopPlaying()
             _phoneAlarmTriggered.value = false
 
-            // ===== 核心修复：只在真正需要停止报警时才通知 Service =====
-            // 发送 STOP_PHONE_ALARM 给 Service，让 Service 知道用户已确认
             val context = getApplication<Application>().applicationContext
             val stopIntent = Intent(context, BleMonitorService::class.java).apply {
                 action = BleMonitorService.ACTION_STOP_PHONE_ALARM
             }
             try {
                 context.startService(stopIntent)
-                Log.d("HomeViewModel", "已通知 Service 用户确认断连报警")
+                Log.d("HomeViewModel", "已通知 Service 重置断连报警状态")
             } catch (e: Exception) {
                 Log.e("HomeViewModel", "通知 Service 失败", e)
             }

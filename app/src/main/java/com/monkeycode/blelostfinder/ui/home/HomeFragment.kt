@@ -247,11 +247,7 @@ class HomeFragment : Fragment() {
     }
 
     private fun connectToDevice() {
-        // ===== 核心修复：不再调用 stopPhoneAlarm() =====
-        // stopPhoneAlarm() 会发送 ACTION_STOP_PHONE_ALARM 给 Service，
-        // 导致 Service 的 isDisconnectAlarmAcknowledged 被设为 true，
-        // 即使用户没有点击"好的"确认，也会跳过下次断连报警。
-        // 只在用户真正点击弹窗"好的"时才调用 stopPhoneAlarm()。
+        viewModel.stopPhoneAlarm()
         viewModel.connectToDevice()
     }
 
@@ -310,7 +306,6 @@ class HomeFragment : Fragment() {
             .setTitle("[$deviceName] 正在寻找您的手机")
             .setMessage(message)
             .setPositiveButton("好的") { _, _ ->
-                // ===== 核心修复：用户点击"好的"时才停止报警并设置确认标志 =====
                 viewModel.stopPhoneAlarm()
                 dismissAlarmDialog()
             }

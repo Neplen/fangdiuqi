@@ -94,12 +94,6 @@ class BleManager @Inject constructor(
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
-    // ===== 核心修复：添加连接状态标志，防止并发连接请求导致 status=133 =====
-    // 注意：此标志只用于 reconnectIfDisconnected() 的防重入保护
-    // connectDirectly() 不受此限制，确保用户手动连接始终畅通
-    @Volatile
-    private var isConnecting = false
-
     fun shouldEnableDeviceDisconnectAlarm(
         isWifiDndEnabled: Boolean,
         isWifiConnected: Boolean,
@@ -172,15 +166,14 @@ class BleManager @Inject constructor(
 
     private val bleCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            Log.d(TAG, "Connection state changed: $status, newState=$newState")
-
-            // ===== 核心修复：无论成功失败，连接流程结束，重置 isConnecting 标志 =====
-            // 但注意：如果 newState==CONNECTING，说明是另一个连接请求，不要重置
-            if (newState != BluetoothProfile.STATE_CONNECTING) {
-                isConnecting = false
-                Log.d(TAG, "连接流程结束，重置 isConnecting=false")
+            // ===== 核心修复：忽略已废弃 GATT 实例的回调，防止多个旧连接同时断开导致重复重连 =====
+            if (bluetoothGatt != null && bluetoothGatt != gatt) {
+                Log.w(TAG, "忽略非当前GATT的连接状态回调 (old client)")
+                try { gatt.close() } catch (e: Exception) {}
+                return
             }
 
+            Log.d(TAG, "Connection state changed: $status, newState=$newState")
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     _connectionState.value = BleConnectionState.Connected
@@ -499,6 +492,18 @@ class BleManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     fun connectDirectly(macAddress: String) {
+        // ===== 核心修复：所有连接操作统一到主线程串行执行，避免多线程并发 connectGatt =====
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { connectDirectly(macAddress) }
+            return
+        }
+
+        // 防御：已连接时跳过，避免重复创建 GATT
+        if (_connectionState.value is BleConnectionState.Connected) {
+            Log.d(TAG, "设备已连接，跳过重复连接")
+            return
+        }
+
         try {
             deviceMacToConnect = macAddress
 
@@ -677,6 +682,18 @@ class BleManager @Inject constructor(
     }
 
     private fun scheduleReconnect(mac: String) {
+        // ===== 核心修复：统一在主线程执行，避免并发 =====
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { scheduleReconnect(mac) }
+            return
+        }
+
+        // 防御：已连接则跳过
+        if (_connectionState.value is BleConnectionState.Connected) {
+            Log.d(TAG, "设备已连接，跳过自动重连")
+            return
+        }
+
         val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE)
             as? BluetoothManager)?.adapter
 
@@ -696,32 +713,29 @@ class BleManager @Inject constructor(
 
     // ===== 修改：reconnectIfDisconnected 不再使用硬编码 MAC，改为从 DataStore 读取 =====
     // 由 BleMonitorService 或 HomeViewModel 传入实际保存的 MAC
-    // ===== 核心修复：增加防并发保护，避免多个路径同时发起连接导致 status=133 =====
     fun reconnectIfDisconnected(macAddress: String? = deviceMacToConnect) {
-        // 如果已经在连接中，跳过（避免并发）
-        if (isConnecting) {
-            Log.d(TAG, "已有连接在进行中，跳过重连")
-            return
-        }
-
-        // 如果已经连接，跳过
-        if (_connectionState.value is BleConnectionState.Connected) {
-            Log.d(TAG, "设备已连接，跳过重连")
+        // ===== 核心修复：统一在主线程执行，避免多线程并发 connectGatt =====
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { reconnectIfDisconnected(macAddress) }
             return
         }
 
         val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
 
         if (macAddress != null && currentAdapter != null && currentAdapter.isEnabled) {
+            // 已连接或连接中则跳过，避免重复
+            if (_connectionState.value is BleConnectionState.Connected || _connectionState.value is BleConnectionState.Connecting) {
+                Log.d(TAG, "设备已连接或连接中，跳过重连")
+                return
+            }
+
             try {
                 bluetoothAdapter = currentAdapter
                 cleanupGatt()
-                isConnecting = true
                 connectDirectly(macAddress)
                 Log.d(TAG, "蓝牙重连已发起：$macAddress")
             } catch (e: Exception) {
                 Log.e(TAG, "蓝牙重连失败", e)
-                isConnecting = false
             }
         } else {
             if (macAddress == null) {
@@ -746,20 +760,6 @@ class BleManager @Inject constructor(
                 Log.d(TAG, "清理旧 GATT 资源")
                 try { oldGatt.disconnect() } catch (e: Exception) {}
                 try { oldGatt.close() } catch (e: Exception) {}
-                try {
-                    val mBluetoothGattField = oldGatt.javaClass.getDeclaredField("mBluetoothGatt")
-                    mBluetoothGattField.isAccessible = true
-                    val mBluetoothGatt = mBluetoothGattField.get(oldGatt)
-                    if (mBluetoothGatt != null) {
-                        val closeMethod = mBluetoothGatt.javaClass.getMethod("close")
-                        closeMethod.invoke(mBluetoothGatt)
-                    }
-                } catch (e: Exception) {}
-                try {
-                    val callbackField = oldGatt.javaClass.getDeclaredField("mCallback")
-                    callbackField.isAccessible = true
-                    callbackField.set(oldGatt, null)
-                } catch (e: Exception) {}
             } catch (e: Exception) {
                 Log.e(TAG, "清理 GATT 异常", e)
             }

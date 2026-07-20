@@ -247,6 +247,10 @@ class HomeFragment : Fragment() {
     }
 
     private fun connectToDevice() {
+        // 核心修复：点击"连接"按钮时，强制重置 BLE 状态
+        // 解决"蓝牙断连后无法自动恢复连接，手动点击连接也无效，搜索显示 0 设备"的问题
+        viewModel.resetBleState()
+        
         viewModel.stopPhoneAlarm()
         viewModel.connectToDevice()
     }

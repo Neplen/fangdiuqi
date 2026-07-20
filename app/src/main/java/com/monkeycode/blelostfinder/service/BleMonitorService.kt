@@ -119,10 +119,6 @@ class BleMonitorService : Service() {
     private var goOutReminderStartTime: Long? = null
     private var goOutReminderStopTime: Long? = null
 
-    // ===== 核心修复：Service 层重连频率控制，避免与 BleManager 断开回调并发 =====
-    private var lastReconnectAttemptTime: Long = 0L
-    private val RECONNECT_COOLDOWN_MS = 4000L
-
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "Service created")
@@ -157,14 +153,9 @@ class BleMonitorService : Service() {
                                 Log.d(TAG, "收到外部停止命令，已重置报警状态")
                             }
                         }
-                        // ===== 核心修复：只在报警确实在播放时，才标记用户已确认 =====
-                        // 避免 HomeFragment.onResume() 自动重连时误触确认
-                        if (isAlarmPlaying || alarmSoundManager.isPlaying()) {
-                            isDisconnectAlarmAcknowledged = true
-                            Log.d(TAG, "用户已确认断连报警，当前断连期间不再重复触发")
-                        } else {
-                            Log.d(TAG, "报警未在播放，不标记断连确认（防止误触）")
-                        }
+                        // 核心修复：用户点击"好的"确认，标记已知晓断连
+                        isDisconnectAlarmAcknowledged = true
+                        Log.d(TAG, "用户已确认断连报警，当前断连期间不再重复触发")
                     }
                 }
                 ACTION_STOP_GO_OUT_REMINDER -> {
@@ -639,14 +630,6 @@ class BleMonitorService : Service() {
                 val connectionState = bleManager.connectionState.value
 
                 if (connectionState is BleConnectionState.Disconnected) {
-                    // ===== 核心修复：Service 层控制重连冷却，避免与 BleManager 断开回调并发 =====
-                    val now = System.currentTimeMillis()
-                    if (now - lastReconnectAttemptTime < RECONNECT_COOLDOWN_MS) {
-                        // 冷却期内，跳过本次重连
-                        continue
-                    }
-                    lastReconnectAttemptTime = now
-
                     deviceMac?.let { mac ->
                         bleManager.reconnectIfDisconnected(mac)
                     } ?: Log.d(TAG, "未绑定设备，跳过重连")

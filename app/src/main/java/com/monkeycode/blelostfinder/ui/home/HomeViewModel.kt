@@ -102,6 +102,19 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 核心修复：强制重置 BLE 状态
+     * 解决"蓝牙断连后无法恢复连接"的问题
+     */
+    fun resetBleState() {
+        try {
+            bleManager.forceResetBleState()
+            Log.d("HomeViewModel", "已强制重置 BLE 状态")
+        } catch (e: Exception) {
+            Log.e("HomeViewModel", "重置 BLE 状态失败", e)
+        }
+    }
+
     private fun loadDevice(macAddress: String) {
         viewModelScope.launch {
             deviceRepository.getDeviceByMacFlow(macAddress).collect { device: BleDevice? ->

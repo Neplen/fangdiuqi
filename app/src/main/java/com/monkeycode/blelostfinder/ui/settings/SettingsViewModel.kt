@@ -32,25 +32,32 @@ class SettingsViewModel @Inject constructor(
     val isScheduleDndEnabled: Flow<Boolean> = settingsManager.isScheduleDndEnabled
     val dndStartTime: Flow<String> = settingsManager.dndStartTime
     val dndEndTime: Flow<String> = settingsManager.dndEndTime
-
+    
     // 出门提醒功能配置
     private val _isGoOutReminderEnabled = MutableStateFlow(false)
     val isGoOutReminderEnabled: StateFlow<Boolean> = _isGoOutReminderEnabled.asStateFlow()
-
+    
     private val _homeWifiSsid = MutableStateFlow("")
     val homeWifiSsid: StateFlow<String> = _homeWifiSsid.asStateFlow()
+    
+    private val _homeWifiBssid = MutableStateFlow("")
+    val homeWifiBssid: StateFlow<String> = _homeWifiBssid.asStateFlow()
 
     init {
         viewModelScope.launch {
             settingsManager.isDisconnectAlarmEnabled.collect { _isDisconnectAlarmEnabled.value = it }
         }
-
+        
         viewModelScope.launch {
             settingsManager.isGoOutReminderEnabled.collect { _isGoOutReminderEnabled.value = it }
         }
-
+        
         viewModelScope.launch {
             settingsManager.homeWifiSsid.collect { _homeWifiSsid.value = it }
+        }
+        
+        viewModelScope.launch {
+            settingsManager.homeWifiBssid.collect { _homeWifiBssid.value = it }
         }
     }
 
@@ -110,9 +117,9 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    fun saveHomeWifi(ssid: String) {
+    fun saveHomeWifi(ssid: String, bssid: String) {
         viewModelScope.launch {
-            settingsManager.saveHomeWifi(ssid)
+            settingsManager.saveHomeWifi(ssid, bssid)
         }
     }
 

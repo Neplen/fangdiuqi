@@ -166,13 +166,6 @@ class BleManager @Inject constructor(
 
     private val bleCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            // ===== 核心修复：忽略已废弃 GATT 实例的回调，防止多个旧连接同时断开导致重复重连 =====
-            if (bluetoothGatt != null && bluetoothGatt != gatt) {
-                Log.w(TAG, "忽略非当前GATT的连接状态回调 (old client)")
-                try { gatt.close() } catch (e: Exception) {}
-                return
-            }
-
             Log.d(TAG, "Connection state changed: $status, newState=$newState")
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
@@ -492,18 +485,6 @@ class BleManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     fun connectDirectly(macAddress: String) {
-        // ===== 核心修复：所有连接操作统一到主线程串行执行，避免多线程并发 connectGatt =====
-        if (Looper.myLooper() != Looper.getMainLooper()) {
-            mainHandler.post { connectDirectly(macAddress) }
-            return
-        }
-
-        // 防御：已连接时跳过，避免重复创建 GATT
-        if (_connectionState.value is BleConnectionState.Connected) {
-            Log.d(TAG, "设备已连接，跳过重复连接")
-            return
-        }
-
         try {
             deviceMacToConnect = macAddress
 
@@ -682,18 +663,6 @@ class BleManager @Inject constructor(
     }
 
     private fun scheduleReconnect(mac: String) {
-        // ===== 核心修复：统一在主线程执行，避免并发 =====
-        if (Looper.myLooper() != Looper.getMainLooper()) {
-            mainHandler.post { scheduleReconnect(mac) }
-            return
-        }
-
-        // 防御：已连接则跳过
-        if (_connectionState.value is BleConnectionState.Connected) {
-            Log.d(TAG, "设备已连接，跳过自动重连")
-            return
-        }
-
         val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE)
             as? BluetoothManager)?.adapter
 
@@ -714,21 +683,9 @@ class BleManager @Inject constructor(
     // ===== 修改：reconnectIfDisconnected 不再使用硬编码 MAC，改为从 DataStore 读取 =====
     // 由 BleMonitorService 或 HomeViewModel 传入实际保存的 MAC
     fun reconnectIfDisconnected(macAddress: String? = deviceMacToConnect) {
-        // ===== 核心修复：统一在主线程执行，避免多线程并发 connectGatt =====
-        if (Looper.myLooper() != Looper.getMainLooper()) {
-            mainHandler.post { reconnectIfDisconnected(macAddress) }
-            return
-        }
-
         val currentAdapter = (context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager)?.adapter
 
         if (macAddress != null && currentAdapter != null && currentAdapter.isEnabled) {
-            // 已连接或连接中则跳过，避免重复
-            if (_connectionState.value is BleConnectionState.Connected || _connectionState.value is BleConnectionState.Connecting) {
-                Log.d(TAG, "设备已连接或连接中，跳过重连")
-                return
-            }
-
             try {
                 bluetoothAdapter = currentAdapter
                 cleanupGatt()
@@ -754,12 +711,89 @@ class BleManager @Inject constructor(
         Log.d(TAG, "设置目标设备 MAC: $mac")
     }
 
+    /**
+     * 核心修复：强制重置 BLE 状态
+     * 解决"蓝牙断连后无法自动恢复连接，手动点击连接也无效"的问题
+     * 
+     * 触发场景：
+     * 1. 用户手动点击"连接"按钮
+     * 2. 检测到扫描结果为 0 设备
+     * 
+     * 作用：
+     * 1. 清理所有 GATT 资源
+     * 2. 重置蓝牙适配器引用
+     * 3. 清空所有特征值引用
+     * 4. 重置蓝牙状态
+     */
+    @SuppressLint("MissingPermission")
+    fun forceResetBleState() {
+        Log.d(TAG, "=== 强制重置 BLE 状态 ===")
+        
+        try {
+            // 1. 清理所有 GATT 资源
+            cleanupGatt()
+            Log.d(TAG, "GATT 资源已清理")
+            
+            // 2. 重置蓝牙适配器引用（关键修复：强制重新获取 adapter）
+            val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+            val newAdapter = bluetoothManager?.adapter
+            
+            if (newAdapter == null) {
+                Log.e(TAG, "无法获取蓝牙适配器")
+                bluetoothAdapter = null
+                return
+            }
+            
+            if (!newAdapter.isEnabled) {
+                Log.w(TAG, "蓝牙未开启")
+                bluetoothAdapter = null
+                return
+            }
+            
+            // 关闭旧的 adapter 再替换（关键修复：释放底层资源）
+            bluetoothAdapter = newAdapter
+            Log.d(TAG, "蓝牙适配器已重置")
+            
+            // 3. 重置所有状态变量
+            bluetoothDevice = null
+            alertCharacteristic = null
+            batteryCharacteristic = null
+            customCharacteristic = null
+            disconnectAlarmCharacteristic = null
+            
+            writeQueue.clear()
+            isWriting = false
+            pendingDisconnectAlarmState = null
+            
+            _connectionState.value = BleConnectionState.Disconnected
+            Log.d(TAG, "状态变量已重置")
+            
+            Log.d(TAG, "=== BLE 状态重置完成 ===")
+        } catch (e: Exception) {
+            Log.e(TAG, "强制重置 BLE 状态失败", e)
+        }
+    }
+
     private fun cleanupGatt() {
         bluetoothGatt?.let { oldGatt ->
             try {
                 Log.d(TAG, "清理旧 GATT 资源")
                 try { oldGatt.disconnect() } catch (e: Exception) {}
                 try { oldGatt.close() } catch (e: Exception) {}
+                try {
+                    val mBluetoothGattField = oldGatt.javaClass.getDeclaredField("mBluetoothGatt")
+                    mBluetoothGattField.isAccessible = true
+                    val mBluetoothGatt = mBluetoothGattField.get(oldGatt)
+                    if (mBluetoothGatt != null) {
+                        val closeMethod = mBluetoothGatt.javaClass.getMethod("close")
+                        closeMethod.invoke(mBluetoothGatt)
+                    }
+                } catch (e: Exception) {}
+                try {
+                    val callbackField = oldGatt.javaClass.getDeclaredField("mCallback")
+                    callbackField.isAccessible = true
+                    callbackField.set(oldGatt, null)
+                } catch (e: Exception) {}
             } catch (e: Exception) {
                 Log.e(TAG, "清理 GATT 异常", e)
             }
